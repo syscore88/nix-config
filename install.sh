@@ -274,6 +274,7 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     p7zip
     unrar
     unzip
+    git
     wget
     curl
     mc
