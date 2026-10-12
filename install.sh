@@ -306,6 +306,42 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
   users.groups.libvirtd.members = [ "__INSTALL_USER__" ];
 
   services.flatpak.enable = true;
+
+  environment.plasma6.excludePackages =
+    builtins.filter (p: p != null)
+      (map (n: pkgs.kdePackages.${n} or null) [
+        "elisa"
+        "kwalletmanager"
+        "plasma-browser-integration"
+        "plasma-vault"
+        "krfb"
+        "decibels"
+      ]);
+
+  environment.gnome.excludePackages =
+    builtins.filter (p: p != null)
+      (map (n: pkgs.${n} or null) [
+        "gnome-calendar"
+        "gnome-clocks"
+        "gnome-music"
+        "gnome-user-docs"
+        "gnome-contacts"
+        "gnome-maps"
+        "gnome-weather"
+        "yelp"
+        "evolution"
+        "evolution-ews"
+        "epiphany"
+        "decibels"
+        "rhythmbox"
+        "showtime"
+      ]);
+
+  environment.xfce.excludePackages =
+    builtins.filter (p: p != null)
+      (map (n: pkgs.${n} or null) [
+        "parole"
+      ]);
   # --- install.sh: END ---
 NIXMODULE_EOF
 sed -i "s/__INSTALL_USER__/$CURRENT_USER/g" "$BLOCK_TMP"
@@ -338,6 +374,42 @@ sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flat
 sudo flatpak update --appstream || true
 flatpak info com.github.tchx84.Flatseal &>/dev/null || sudo flatpak install -y flathub com.github.tchx84.Flatseal || true
 flatpak info it.mijorus.gearlever &>/dev/null || sudo flatpak install -y flathub it.mijorus.gearlever || true
+
+dconf load /org/virt-manager/virt-manager/ <<'EOF' || true
+[/]
+manager-window-height=297
+manager-window-width=478
+xmleditor-enabled=true
+
+[confirm]
+delete-storage=false
+forcepoweroff=false
+
+[connections]
+autoconnect=['qemu:///system']
+uris=['qemu:///system']
+
+[conns/qemu:system]
+window-size=(800, 600)
+
+[details]
+show-toolbar=true
+
+[new-vm]
+cpu-default='host-passthrough'
+firmware='uefi'
+graphics-type='spice'
+storage-format='raw'
+
+[stats]
+enable-disk-poll=true
+enable-memory-poll=true
+enable-net-poll=true
+
+[vmlist-fields]
+disk-usage=false
+network-traffic=false
+EOF
 
 show_progress 4 $TOTAL_STEPS "$MSG_REBUILD"
 
