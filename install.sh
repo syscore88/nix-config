@@ -260,7 +260,6 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     gamescope
     vkd3d
     lsfg-vk-ui
-
     kdePackages.partitionmanager
     gnome-disk-utility
     timeshift
@@ -282,8 +281,6 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     zsh
     zsh-autosuggestions
     zsh-syntax-highlighting
-
-    git
     patch
     stdenv.cc
     gcc
