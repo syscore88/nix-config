@@ -44,6 +44,9 @@ Adds the Flathub remote, updates appstream data, installs Flatseal and Gear Leve
 ---
 
 ## 🚀 How to Run
+```bash
+   nix-shell -p git
+ ```
 
 1. Clone the repository to your disk
    ```bash
