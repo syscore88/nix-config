@@ -179,17 +179,17 @@ BLOCK_TMP="$(mktemp)"
 cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
   # --- install.sh: BEGIN (blok jest nadpisywany przy ponownym uruchomieniu skryptu) ---
   hardware.graphics = {
-    enable = true;
-    enable32Bit = true;
+    enable = pkgs.lib.mkForce true;
+    enable32Bit = pkgs.lib.mkForce true;
   };
 
-  programs.dconf.enable = true;
+  programs.dconf.enable = pkgs.lib.mkForce true;
 
-  services.geoclue2.enable = true;
+  services.geoclue2.enable = pkgs.lib.mkForce true;
 
-  programs.cdemu.enable = true;
+  programs.cdemu.enable = pkgs.lib.mkForce true;
 
-  hardware.bluetooth.enable = true;
+  hardware.bluetooth.enable = pkgs.lib.mkForce true;
   boot.supportedFilesystems = [ "ntfs" "exfat" "btrfs" ];
 
   networking.nameservers = [
@@ -206,12 +206,12 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
   ];
 
   boot.plymouth = {
-    enable = true;
-    theme = "bgrt";
+    enable = pkgs.lib.mkForce true;
+    theme = pkgs.lib.mkForce "bgrt";
   };
 
-  boot.consoleLogLevel = 3;
-  boot.initrd.verbose = false;
+  boot.consoleLogLevel = pkgs.lib.mkForce 3;
+  boot.initrd.verbose = pkgs.lib.mkForce false;
   boot.kernelParams = [
     "quiet"
     "splash"
@@ -219,14 +219,14 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     "systemd.show_status=auto"
   ];
 
-  boot.loader.timeout = 0;
+  boot.loader.timeout = pkgs.lib.mkForce 0;
 
-  boot.loader.systemd-boot.configurationLimit = 2;
+  boot.loader.systemd-boot.configurationLimit = pkgs.lib.mkForce 2;
 
   nix.gc = {
-    automatic = true;
-    dates = "daily";
-    options = "--delete-generations +2";
+    automatic = pkgs.lib.mkForce true;
+    dates = pkgs.lib.mkForce "daily";
+    options = pkgs.lib.mkForce "--delete-generations +2";
   };
 
   environment.systemPackages = with pkgs; [
@@ -279,9 +279,6 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     curl
     mc
     vim
-    zsh
-    zsh-autosuggestions
-    zsh-syntax-highlighting
     patch
     stdenv.cc
     gcc
@@ -296,16 +293,24 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     coreutils
   ];
 
-  programs.gamemode.enable = true;
+  programs.gamemode.enable = pkgs.lib.mkForce true;
 
-  virtualisation.libvirtd.enable = true;
-  programs.virt-manager.enable = true;
-  virtualisation.spiceUSBRedirection.enable = true;
-  security.polkit.enable = true;
+  virtualisation.libvirtd.enable = pkgs.lib.mkForce true;
+  programs.virt-manager.enable = pkgs.lib.mkForce true;
+  virtualisation.spiceUSBRedirection.enable = pkgs.lib.mkForce true;
+  security.polkit.enable = pkgs.lib.mkForce true;
 
   users.groups.libvirtd.members = [ "__INSTALL_USER__" ];
 
-  services.flatpak.enable = true;
+  programs.zsh = {
+    enable = pkgs.lib.mkForce true;
+    autosuggestions.enable = pkgs.lib.mkForce true;
+    syntaxHighlighting.enable = pkgs.lib.mkForce true;
+  };
+
+  users.users."__INSTALL_USER__".shell = pkgs.lib.mkForce pkgs.zsh;
+
+  services.flatpak.enable = pkgs.lib.mkForce true;
 
   environment.plasma6.excludePackages =
     builtins.filter (p: p != null)
