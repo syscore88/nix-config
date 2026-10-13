@@ -192,18 +192,13 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
   hardware.bluetooth.enable = pkgs.lib.mkForce true;
   boot.supportedFilesystems = [ "ntfs" "exfat" "btrfs" ];
 
-  networking.nameservers = [
-    "1.1.1.2"
-    "1.0.0.2"
-    "2606:4700:4700::1112"
-    "2606:4700:4700::1002"
-  ];
-  networking.networkmanager.insertNameservers = [
-    "1.1.1.2"
-    "1.0.0.2"
-    "2606:4700:4700::1112"
-    "2606:4700:4700::1002"
-  ];
+  networking.networkmanager.dns = "default";
+  environment.etc."NetworkManager/conf.d/global-dns.conf".text = ''
+    [global-dns]
+
+    [global-dns-domain-*]
+    servers=1.1.1.2,1.0.0.2,2606:4700:4700::1112,2606:4700:4700::1002
+  '';
 
   boot.plymouth = {
     enable = pkgs.lib.mkForce true;
@@ -390,6 +385,14 @@ if ! sudo nixos-rebuild switch; then
     log_err "Przebudowa systemu nie powiodła się. Przywrócono configuration.nix z kopii: $BACKUP" \
             "System rebuild failed. configuration.nix restored from backup: $BACKUP"
     exit 1
+fi
+
+ACTIVE_CONN=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep -v "^lo" | head -n 1 | cut -d: -f1 || true)
+if [[ -n "$ACTIVE_CONN" ]]; then
+    sudo nmcli connection modify "$ACTIVE_CONN" \
+        ipv4.dns "1.1.1.2,1.0.0.2" \
+        ipv6.dns "2606:4700:4700::1112,2606:4700:4700::1002" || true
+    sudo nmcli connection up "$ACTIVE_CONN" || true
 fi
 
 sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
