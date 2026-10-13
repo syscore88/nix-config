@@ -179,11 +179,14 @@ EOF
     fi
 else
     SUDOERS_TMP="$(mktemp)"
+    SUDO_ERR="$(mktemp)"
     printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$CURRENT_USER" > "$SUDOERS_TMP"
-    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' visudo -cf "$SUDOERS_TMP" &>/dev/null \
-       && printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99-temp-update &>/dev/null; then
+    VISUDO_BIN="$(command -v visudo 2>/dev/null || echo /run/current-system/sw/bin/visudo)"
+    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' "$VISUDO_BIN" -cf "$SUDOERS_TMP" >/dev/null 2>>"$SUDO_ERR" \
+       && printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' install -d -m 0750 -o root -g root /etc/sudoers.d >/dev/null 2>>"$SUDO_ERR" \
+       && printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99-temp-update >/dev/null 2>>"$SUDO_ERR"; then
         PRIVS_GRANTED=1
-        rm -f "$SUDOERS_TMP"
+        rm -f "$SUDOERS_TMP" "$SUDO_ERR"
         unset SUDO_PASSWORD
         if ! sudo -n true 2>/dev/null; then
             if [[ "$SCRIPT_LANG" == "pl" ]]; then
@@ -193,7 +196,8 @@ else
             fi
         fi
     else
-        rm -f "$SUDOERS_TMP"
+        cat "$SUDO_ERR"
+        rm -f "$SUDOERS_TMP" "$SUDO_ERR"
         unset SUDO_PASSWORD
         if [[ "$SCRIPT_LANG" == "pl" ]]; then
             echo -e "${ERR}✘ Nieprawidłowe hasło lub składnia pliku sudoers – przerywam. Jeśli w /etc/sudoers działa opcja targetpw, podaj hasło roota.${NC}" >&3
