@@ -157,6 +157,11 @@ printf '\033[?7l' >&3
 show_progress 0 $TOTAL_STEPS "$MSG_PREP"
 show_progress 1 $TOTAL_STEPS "$MSG_PREP"
 
+if [ -f "$SCRIPT_DIR/.update.sh" ]; then
+    cp -af "$SCRIPT_DIR/.update.sh" ~/.update.sh
+    chmod +x ~/.update.sh
+fi
+
 if [ -d "$SCRIPT_DIR/.local" ]; then
     mkdir -p ~/.local
     cp -afT "$SCRIPT_DIR/.local" ~/.local
