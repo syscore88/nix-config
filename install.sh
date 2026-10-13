@@ -312,6 +312,11 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
 
   services.flatpak.enable = pkgs.lib.mkForce true;
 
+  programs.appimage = {
+    enable = pkgs.lib.mkForce true;
+    binfmt = pkgs.lib.mkForce true;
+  };
+
   environment.plasma6.excludePackages =
     builtins.filter (p: p != null)
       (map (n: pkgs.kdePackages.${n} or null) [
