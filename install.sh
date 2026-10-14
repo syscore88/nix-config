@@ -425,7 +425,6 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
         "plasma-browser-integration"
         "plasma-vault"
         "krfb"
-        "decibels"
       ]);
 
   nixpkgs.overlays = [
