@@ -464,6 +464,9 @@ NIXMODULE_EOF
 sed -i "s/__INSTALL_USER__/$CURRENT_USER/g" "$BLOCK_TMP"
 
 sudo sed -i '/install\.sh: BEGIN/,/install\.sh: END/d' "$CONF"
+while IFS= read -r BLOCK_KEY; do
+    sudo sed -i -E "/^[[:space:]]*${BLOCK_KEY//./\\.}[[:space:]]*=.*;[[:space:]]*$/d" "$CONF"
+done < <(grep -E '^  [A-Za-z0-9_.-]+ = .*;$' "$BLOCK_TMP" | sed -E 's/^  ([A-Za-z0-9_.-]+) = .*/\1/')
 
 LAST_BRACE_LINE="$(grep -n '^}' "$CONF" | tail -n 1 | cut -d: -f1)"
 if [[ -z "$LAST_BRACE_LINE" ]]; then
