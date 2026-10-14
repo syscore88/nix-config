@@ -425,6 +425,7 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
         "plasma-browser-integration"
         "plasma-vault"
         "krfb"
+        "discover"
       ]);
 
   nixpkgs.overlays = [
@@ -456,6 +457,7 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
         "decibels"
         "rhythmbox"
         "showtime"
+        "gnome-software"
       ]);
 
   environment.xfce.excludePackages =
