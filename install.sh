@@ -300,18 +300,18 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     cdemu-daemon
     cdemu-client
     gcdemu
-    image-analyzer
     steam-run
     brave
     google-chrome
-    firefox
     faugus-launcher
     kdePackages.ghostwriter
     libreoffice-qt
     hunspellDicts.pl_PL
     gimp
+    gimpPlugins.gmic
     krita
     krita-plugin-gmic
+    gmic
     discord
     telegram-desktop
     qbittorrent
