@@ -192,10 +192,30 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
 
   services.geoclue2.enable = pkgs.lib.mkForce true;
 
-  programs.cdemu.enable = pkgs.lib.mkForce true;
+  boot.extraModulePackages = [ pkgs.linuxPackages_xanmod_latest.vhba ];
+
+  services.udev.extraRules = ''
+    KERNEL=="vhba_ctl", MODE="0660", OWNER="root", GROUP="wheel"
+  '';
+
+  services.dbus.packages = [ pkgs.cdemu-daemon ];
+
+  systemd.user.services.cdemu-daemon = {
+    description = "CDEmu daemon";
+    serviceConfig = {
+      Type = "dbus";
+      BusName = "net.sf.cdemu.CDEmuDaemon";
+      ExecStart = "${pkgs.cdemu-daemon}/bin/cdemu-daemon --config-file \"%h/.config/cdemu-daemon\"";
+      Restart = "no";
+    };
+  };
 
   hardware.bluetooth.enable = pkgs.lib.mkForce true;
-  boot.supportedFilesystems = [ "ntfs" "exfat" "btrfs" ];
+  boot.supportedFilesystems = [ "exfat" "btrfs" "ntfs" ];
+
+  boot.tmp.cleanOnBoot = pkgs.lib.mkForce true;
+  boot.kernelPackages = pkgs.lib.mkForce pkgs.linuxPackages_xanmod_latest;
+  boot.kernelModules = [ "ntsync" ];
 
   networking.networkmanager.dns = "default";
   environment.etc."NetworkManager/conf.d/global-dns.conf".text = ''
@@ -210,14 +230,40 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     theme = pkgs.lib.mkForce "bgrt";
   };
 
-  boot.consoleLogLevel = pkgs.lib.mkForce 3;
+  boot.consoleLogLevel = pkgs.lib.mkForce 2;
   boot.initrd.verbose = pkgs.lib.mkForce false;
   boot.kernelParams = [
     "quiet"
     "splash"
     "udev.log_level=3"
     "systemd.show_status=auto"
+    "nohibernate"
+    "usbcore.autosuspend=-1"
+    "mitigations=off"
   ];
+
+  boot.kernel.sysctl = {
+    "kernel.split_lock_mitigate" = 0;
+    "kernel.sched_cfs_bandwidth_slice_us" = 3000;
+    "net.ipv4.tcp_fin_timeout" = 5;
+    "vm.max_map_count" = 2147483642;
+    "vm.swappiness" = 10;
+    "vm.vfs_cache_pressure" = 50;
+    "vm.dirty_bytes" = 50331648;
+    "vm.dirty_background_bytes" = 16777216;
+    "vm.dirty_expire_centisecs" = 3000;
+    "vm.dirty_writeback_centisecs" = 1500;
+    "vm.min_free_kbytes" = 59030;
+  };
+
+  systemd.settings.Manager = {
+    DefaultTimeoutStopSec = "3s";
+  };
+
+  zramSwap = {
+    enable = pkgs.lib.mkForce true;
+    algorithm = pkgs.lib.mkForce "lz4";
+  };
 
   boot.loader.timeout = pkgs.lib.mkForce 0;
 
@@ -229,8 +275,29 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     options = pkgs.lib.mkForce "--delete-generations +2";
   };
 
+  nix.settings = {
+    auto-optimise-store = true;
+    experimental-features = [ "nix-command" ];
+  };
+
+  environment.sessionVariables = {
+    EDITOR = "nano";
+    GTK_USE_PORTAL = "1";
+    OBS_VKCAPTURE_QUIET = "1";
+    MESA_SHADER_CACHE_MAX_SIZE = "24G";
+  };
+
+  xdg.portal = {
+    enable = pkgs.lib.mkForce true;
+    xdgOpenUsePortal = pkgs.lib.mkForce true;
+  };
+
   environment.systemPackages = with pkgs; [
     dconf-editor
+    cdemu-daemon
+    cdemu-client
+    gcdemu
+    image-analyzer
     steam-run
     brave
     google-chrome
@@ -295,6 +362,19 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
 
   programs.gamemode.enable = pkgs.lib.mkForce true;
 
+  programs.gamescope = {
+    enable = pkgs.lib.mkForce true;
+    capSysNice = false;
+  };
+
+  services.envfs.enable = pkgs.lib.mkForce true;
+  services.swapspace.enable = pkgs.lib.mkForce true;
+  services.fwupd.enable = pkgs.lib.mkForce true;
+  services.printing.enable = pkgs.lib.mkForce false;
+  services.openssh.enable = pkgs.lib.mkForce false;
+
+  networking.firewall.allowedTCPPorts = [ 22 ];
+
   virtualisation.libvirtd.enable = pkgs.lib.mkForce true;
   programs.virt-manager.enable = pkgs.lib.mkForce true;
   virtualisation.spiceUSBRedirection.enable = pkgs.lib.mkForce true;
@@ -304,8 +384,11 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
 
   programs.zsh = {
     enable = pkgs.lib.mkForce true;
+    enableCompletion = pkgs.lib.mkForce true;
     autosuggestions.enable = pkgs.lib.mkForce true;
     syntaxHighlighting.enable = pkgs.lib.mkForce true;
+    enableLsColors = pkgs.lib.mkForce true;
+    histSize = 30000;
     ohMyZsh = {
       enable = pkgs.lib.mkForce true;
       plugins = [ "git" "sudo" ];
@@ -339,6 +422,18 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
         "krfb"
         "decibels"
       ]);
+
+  nixpkgs.overlays = [
+    (final: prev: {
+      kdePackages = prev.kdePackages.overrideScope (kfinal: kprev: {
+        kwalletmanager = kprev.kwalletmanager.overrideAttrs (old: {
+          postInstall = (old.postInstall or "") + ''
+            rm -f $out/share/applications/*kwalletmanager*.desktop
+          '';
+        });
+      });
+    })
+  ];
 
   environment.gnome.excludePackages =
     builtins.filter (p: p != null)
