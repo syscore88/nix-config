@@ -269,6 +269,9 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
 
   boot.loader.systemd-boot.configurationLimit = pkgs.lib.mkForce 2;
 
+  system.autoUpgrade.enable = true;
+  system.autoUpgrade.allowReboot = true;
+
   nix.gc = {
     automatic = pkgs.lib.mkForce true;
     dates = pkgs.lib.mkForce "daily";
