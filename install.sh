@@ -305,7 +305,7 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     google-chrome
     faugus-launcher
     kdePackages.ghostwriter
-    libreoffice-qt
+    libreoffice-fresh
     hunspellDicts.pl_PL
     gimp
     gimpPlugins.gmic
@@ -340,6 +340,8 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     pv
     zenity
     btrfs-progs
+    pkgs.e2fsprogs
+    pkgs.ntfs3g
     fwupd
     p7zip
     unrar
