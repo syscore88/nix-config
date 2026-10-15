@@ -177,326 +177,44 @@ fi
 # ==========================================================
 show_progress 2 $TOTAL_STEPS "$MSG_CONFIG"
 
+MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop packages)
+MODULES_DIR="$NIXOS_DIR/modules"
+
+FOUND_MODULES=()
+for MODULE in "${MODULES[@]}"; do
+    if [[ -f "$SCRIPT_DIR/$MODULE.nix" ]]; then
+        FOUND_MODULES+=("$MODULE")
+    else
+        log_warn "Pominięto brakujący plik $MODULE.nix." \
+                 "Skipping missing file $MODULE.nix."
+    fi
+done
+
+if ! sudo grep -q 'hardware-configuration\.nix' "$CONF"; then
+    log_err "Nie znaleziono listy imports w $CONF." \
+            "Could not find the imports list in $CONF."
+    exit 1
+fi
+
 BACKUP="$CONF.bak-$(date +%Y%m%d_%H%M%S)"
 sudo cp -a "$CONF" "$BACKUP"
 
-BLOCK_TMP="$(mktemp)"
-cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
-  # --- install.sh: BEGIN (blok jest nadpisywany przy ponownym uruchomieniu skryptu) ---
-  hardware.graphics = {
-    enable = pkgs.lib.mkForce true;
-    enable32Bit = pkgs.lib.mkForce true;
-  };
-
-  programs.dconf.enable = pkgs.lib.mkForce true;
-
-  services.geoclue2.enable = pkgs.lib.mkForce true;
-
-  boot.extraModulePackages = [ pkgs.linuxPackages_xanmod_latest.vhba ];
-
-  services.udev.extraRules = ''
-    KERNEL=="vhba_ctl", MODE="0660", OWNER="root", GROUP="wheel"
-  '';
-
-  services.dbus.packages = [ pkgs.cdemu-daemon ];
-
-  systemd.user.services.cdemu-daemon = {
-    description = "CDEmu daemon";
-    serviceConfig = {
-      Type = "dbus";
-      BusName = "net.sf.cdemu.CDEmuDaemon";
-      ExecStart = "${pkgs.cdemu-daemon}/bin/cdemu-daemon --config-file \"%h/.config/cdemu-daemon\"";
-      Restart = "no";
-    };
-  };
-
-  hardware.bluetooth.enable = pkgs.lib.mkForce true;
-  boot.supportedFilesystems = [ "exfat" "btrfs" "ntfs" ];
-
-  boot.tmp.cleanOnBoot = pkgs.lib.mkForce true;
-  boot.kernelPackages = pkgs.lib.mkForce pkgs.linuxPackages_xanmod_latest;
-  boot.kernelModules = [ "ntsync" ];
-
-  networking.networkmanager.dns = "default";
-  environment.etc."NetworkManager/conf.d/global-dns.conf".text = ''
-    [global-dns]
-
-    [global-dns-domain-*]
-    servers=1.1.1.2,1.0.0.2,2606:4700:4700::1112,2606:4700:4700::1002
-  '';
-
-  boot.plymouth = {
-    enable = pkgs.lib.mkForce true;
-    theme = pkgs.lib.mkForce "bgrt";
-  };
-
-  boot.consoleLogLevel = pkgs.lib.mkForce 2;
-  boot.initrd.verbose = pkgs.lib.mkForce false;
-  boot.kernelParams = [
-    "quiet"
-    "splash"
-    "udev.log_level=3"
-    "systemd.show_status=auto"
-    "nohibernate"
-    "usbcore.autosuspend=-1"
-    "mitigations=off"
-  ];
-
-  boot.kernel.sysctl = {
-    "kernel.split_lock_mitigate" = 0;
-    "kernel.sched_cfs_bandwidth_slice_us" = 3000;
-    "net.ipv4.tcp_fin_timeout" = 5;
-    "vm.max_map_count" = 2147483642;
-    "vm.swappiness" = 10;
-    "vm.vfs_cache_pressure" = 50;
-    "vm.dirty_bytes" = 50331648;
-    "vm.dirty_background_bytes" = 16777216;
-    "vm.dirty_expire_centisecs" = 3000;
-    "vm.dirty_writeback_centisecs" = 1500;
-    "vm.min_free_kbytes" = 59030;
-  };
-
-  systemd.settings.Manager = {
-    DefaultTimeoutStopSec = "3s";
-  };
-
-  zramSwap = {
-    enable = pkgs.lib.mkForce true;
-    algorithm = pkgs.lib.mkForce "lz4";
-  };
-
-  boot.loader.timeout = pkgs.lib.mkForce 0;
-
-  boot.loader.systemd-boot.configurationLimit = pkgs.lib.mkForce 2;
-
-  nixpkgs.config.allowInsecurePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [ "electron" "ventoy" ];
-
-  system.autoUpgrade.enable = true;
-  system.autoUpgrade.allowReboot = true;
-
-  nix.gc = {
-    automatic = pkgs.lib.mkForce true;
-    dates = pkgs.lib.mkForce "daily";
-    options = pkgs.lib.mkForce "--delete-generations +2";
-  };
-
-  nix.settings = {
-    auto-optimise-store = true;
-    experimental-features = [ "nix-command" ];
-  };
-
-  environment.sessionVariables = {
-    EDITOR = "nano";
-    GTK_USE_PORTAL = "1";
-    OBS_VKCAPTURE_QUIET = "1";
-  };
-
-  xdg.portal = {
-    enable = pkgs.lib.mkForce true;
-    xdgOpenUsePortal = pkgs.lib.mkForce true;
-  };
-
-  environment.systemPackages = with pkgs; [
-    dconf-editor
-    cdemu-daemon
-    cdemu-client
-    gcdemu
-    steam-run
-    brave
-    google-chrome
-    faugus-launcher
-    kdePackages.ghostwriter
-    libreoffice-fresh
-    hunspellDicts.pl_PL
-    gimp
-    gimpPlugins.gmic
-    krita
-    krita-plugin-gmic
-    gmic
-    discord
-    telegram-desktop
-    qbittorrent
-    audacity
-    handbrake
-    kdePackages.kdenlive
-    soundconverter
-    mixxx
-    qmmp
-    vlc
-    opencode-desktop
-    wine-staging
-    winetricks
-    mangohud
-    gamemode
-    gamescope
-    vkd3d
-    lsfg-vk-ui
-    kdePackages.partitionmanager
-    gnome-disk-utility
-    timeshift
-    bleachbit
-    ventoy
-    fastfetch
-    inxi
-    rsync
-    pv
-    zenity
-    btrfs-progs
-    pkgs.e2fsprogs
-    pkgs.ntfs3g
-    fwupd
-    p7zip
-    unrar
-    unzip
-    git
-    wget
-    curl
-    mc
-    vim
-    patch
-    stdenv.cc
-    gcc
-    clang
-    llvm
-    gnumake
-    cmake
-    meson
-    ninja
-    pkg-config
-    binutils
-    coreutils
-  ];
-
-  programs.gamemode.enable = pkgs.lib.mkForce true;
-
-  programs.gamescope = {
-    enable = pkgs.lib.mkForce true;
-    capSysNice = false;
-  };
-
-  services.envfs.enable = pkgs.lib.mkForce true;
-  services.swapspace.enable = pkgs.lib.mkForce true;
-  services.fwupd.enable = pkgs.lib.mkForce true;
-  services.printing.enable = pkgs.lib.mkForce false;
-  services.openssh.enable = pkgs.lib.mkForce false;
-
-  networking.firewall.allowedTCPPorts = [ 22 ];
-
-  virtualisation.libvirtd.enable = pkgs.lib.mkForce true;
-  programs.virt-manager.enable = pkgs.lib.mkForce true;
-  virtualisation.spiceUSBRedirection.enable = pkgs.lib.mkForce true;
-  security.polkit.enable = pkgs.lib.mkForce true;
-
-  security.sudo.extraRules = [
-    {
-      groups = [ "wheel" ];
-      commands = [
-        {
-          command = "ALL";
-          options = [ "NOPASSWD" ];
-        }
-      ];
-    }
-  ];
-
-  users.groups.libvirtd.members = [ "__INSTALL_USER__" ];
-
-  programs.zsh = {
-    enable = pkgs.lib.mkForce true;
-    enableCompletion = pkgs.lib.mkForce true;
-    autosuggestions.enable = pkgs.lib.mkForce true;
-    syntaxHighlighting.enable = pkgs.lib.mkForce true;
-    enableLsColors = pkgs.lib.mkForce true;
-    histSize = 30000;
-    ohMyZsh = {
-      enable = pkgs.lib.mkForce true;
-      plugins = [ "git" "sudo" ];
-    };
-    promptInit = ''
-      source ${pkgs.zsh-powerlevel10k}/share/zsh-powerlevel10k/powerlevel10k.zsh-theme
-      [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
-    '';
-  };
-
-  fonts.packages = with pkgs; [
-    nerd-fonts.meslo-lg
-  ];
-
-  users.users."__INSTALL_USER__".shell = pkgs.lib.mkForce pkgs.zsh;
-
-  services.flatpak.enable = pkgs.lib.mkForce true;
-
-  programs.appimage = {
-    enable = pkgs.lib.mkForce true;
-    binfmt = pkgs.lib.mkForce true;
-  };
-
-  environment.plasma6.excludePackages =
-    builtins.filter (p: p != null)
-      (map (n: pkgs.kdePackages.${n} or null) [
-        "elisa"
-        "kwalletmanager"
-        "plasma-browser-integration"
-        "plasma-vault"
-        "krfb"
-        "discover"
-      ]);
-
-  nixpkgs.overlays = [
-    (final: prev: {
-      kdePackages = prev.kdePackages.overrideScope (kfinal: kprev: {
-        kwalletmanager = kprev.kwalletmanager.overrideAttrs (old: {
-          postInstall = (old.postInstall or "") + ''
-            rm -f $out/share/applications/*kwalletmanager*.desktop
-          '';
-        });
-      });
-    })
-  ];
-
-  environment.gnome.excludePackages =
-    builtins.filter (p: p != null)
-      (map (n: pkgs.${n} or null) [
-        "gnome-calendar"
-        "gnome-clocks"
-        "gnome-music"
-        "gnome-user-docs"
-        "gnome-contacts"
-        "gnome-maps"
-        "gnome-weather"
-        "yelp"
-        "evolution"
-        "evolution-ews"
-        "epiphany"
-        "decibels"
-        "rhythmbox"
-        "showtime"
-        "gnome-software"
-      ]);
-
-  environment.xfce.excludePackages =
-    builtins.filter (p: p != null)
-      (map (n: pkgs.${n} or null) [
-        "parole"
-      ]);
-  # --- install.sh: END ---
-NIXMODULE_EOF
-sed -i "s/__INSTALL_USER__/$CURRENT_USER/g" "$BLOCK_TMP"
+sudo mkdir -p "$MODULES_DIR"
+for MODULE in "${FOUND_MODULES[@]}"; do
+    sed "s/__INSTALL_USER__/$CURRENT_USER/g" "$SCRIPT_DIR/$MODULE.nix" | sudo tee "$MODULES_DIR/$MODULE.nix" > /dev/null
+    sudo chmod 644 "$MODULES_DIR/$MODULE.nix"
+done
 
 sudo sed -i '/install\.sh: BEGIN/,/install\.sh: END/d' "$CONF"
 while IFS= read -r BLOCK_KEY; do
     sudo sed -i -E "/^[[:space:]]*${BLOCK_KEY//./\\.}[[:space:]]*=.*;[[:space:]]*$/d" "$CONF"
-done < <(grep -E '^  [A-Za-z0-9_.-]+ = .*;$' "$BLOCK_TMP" | sed -E 's/^  ([A-Za-z0-9_.-]+) = .*/\1/')
+done < <(for MODULE in "${FOUND_MODULES[@]}"; do cat "$MODULES_DIR/$MODULE.nix"; done | grep -E '^  [A-Za-z0-9_.-]+ = .*;$' | sed -E 's/^  ([A-Za-z0-9_.-]+) = .*/\1/')
 
-LAST_BRACE_LINE="$(grep -n '^}' "$CONF" | tail -n 1 | cut -d: -f1)"
-if [[ -z "$LAST_BRACE_LINE" ]]; then
-    rm -f "$BLOCK_TMP"
-    log_err "Nie znaleziono końca konfiguracji (}) w $CONF." \
-            "Could not find the closing brace (}) in $CONF."
-    exit 1
-fi
-sudo sed -i "$((LAST_BRACE_LINE - 1))r $BLOCK_TMP" "$CONF"
-rm -f "$BLOCK_TMP"
+for MODULE in "${FOUND_MODULES[@]}"; do
+    if ! sudo grep -qF "./modules/$MODULE.nix" "$CONF"; then
+        sudo sed -i "0,/hardware-configuration\.nix/s|hardware-configuration\.nix|&\n    ./modules/$MODULE.nix|" "$CONF"
+    fi
+done
 
 # ==========================================================
 # 3. PRZEBUDOWA SYSTEMU
@@ -509,55 +227,6 @@ if ! sudo nixos-rebuild switch; then
             "System rebuild failed. configuration.nix restored from backup: $BACKUP"
     exit 1
 fi
-
-ACTIVE_CONN=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep -v "^lo" | head -n 1 | cut -d: -f1 || true)
-if [[ -n "$ACTIVE_CONN" ]]; then
-    sudo nmcli connection modify "$ACTIVE_CONN" \
-        ipv4.dns "1.1.1.2,1.0.0.2" \
-        ipv6.dns "2606:4700:4700::1112,2606:4700:4700::1002" || true
-    sudo nmcli connection up "$ACTIVE_CONN" || true
-fi
-
-sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
-sudo flatpak update --appstream || true
-flatpak info com.github.tchx84.Flatseal &>/dev/null || sudo flatpak install -y flathub com.github.tchx84.Flatseal || true
-flatpak info it.mijorus.gearlever &>/dev/null || sudo flatpak install -y flathub it.mijorus.gearlever || true
-
-dconf load /org/virt-manager/virt-manager/ <<'EOF' || true
-[/]
-manager-window-height=297
-manager-window-width=478
-xmleditor-enabled=true
-
-[confirm]
-delete-storage=false
-forcepoweroff=false
-
-[connections]
-autoconnect=['qemu:///system']
-uris=['qemu:///system']
-
-[conns/qemu:system]
-window-size=(800, 600)
-
-[details]
-show-toolbar=true
-
-[new-vm]
-cpu-default='host-passthrough'
-firmware='uefi'
-graphics-type='spice'
-storage-format='raw'
-
-[stats]
-enable-disk-poll=true
-enable-memory-poll=true
-enable-net-poll=true
-
-[vmlist-fields]
-disk-usage=false
-network-traffic=false
-EOF
 
 show_progress 4 $TOTAL_STEPS "$MSG_REBUILD"
 
