@@ -322,7 +322,7 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     mixxx
     qmmp
     vlc
-    opencode
+    opencode-desktop
     wine-staging
     winetricks
     mangohud
