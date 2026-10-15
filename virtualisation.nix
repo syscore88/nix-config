@@ -14,8 +14,8 @@ in
     {
       settings = {
         "org/virt-manager/virt-manager" = {
-          manager-window-height = 297;
-          manager-window-width = 478;
+          manager-window-height = mkInt32 297;
+          manager-window-width = mkInt32 478;
           xmleditor-enabled = true;
         };
         "org/virt-manager/virt-manager/confirm" = {
