@@ -287,7 +287,6 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     EDITOR = "nano";
     GTK_USE_PORTAL = "1";
     OBS_VKCAPTURE_QUIET = "1";
-    MESA_SHADER_CACHE_MAX_SIZE = "24G";
   };
 
   xdg.portal = {
