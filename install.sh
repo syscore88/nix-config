@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ==========================================================
+# ============================
 # SKRYPT KONFIGURACYJNY NIXOS
-# ==========================================================
+# ============================
 
 set -Eeuo pipefail
 export PATH="/run/wrappers/bin:/run/current-system/sw/bin:$PATH"
@@ -384,6 +384,18 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
   programs.virt-manager.enable = pkgs.lib.mkForce true;
   virtualisation.spiceUSBRedirection.enable = pkgs.lib.mkForce true;
   security.polkit.enable = pkgs.lib.mkForce true;
+
+  security.sudo.extraRules = [
+    {
+      groups = [ "wheel" ];
+      commands = [
+        {
+          command = "ALL";
+          options = [ "NOPASSWD" ];
+        }
+      ];
+    }
+  ];
 
   users.groups.libvirtd.members = [ "__INSTALL_USER__" ];
 
