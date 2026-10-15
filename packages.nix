@@ -11,7 +11,7 @@
     google-chrome
     faugus-launcher
     kdePackages.ghostwriter
-    libreoffice-fresh
+    libreoffice
     hunspellDicts.pl_PL
     gimp
     gimpPlugins.gmic
