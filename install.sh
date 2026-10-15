@@ -269,6 +269,8 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
 
   boot.loader.systemd-boot.configurationLimit = pkgs.lib.mkForce 2;
 
+  nixpkgs.config.allowInsecurePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [ "electron" "ventoy" ];
+
   system.autoUpgrade.enable = true;
   system.autoUpgrade.allowReboot = true;
 
@@ -333,6 +335,7 @@ cat > "$BLOCK_TMP" <<'NIXMODULE_EOF'
     gnome-disk-utility
     timeshift
     bleachbit
+    ventoy
     fastfetch
     inxi
     rsync
