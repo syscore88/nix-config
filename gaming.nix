@@ -9,4 +9,6 @@
     enable = pkgs.lib.mkForce true;
     capSysNice = false;
   };
+
+  programs.steam.enable = true;
 }
