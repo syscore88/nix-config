@@ -177,7 +177,7 @@ fi
 # ==========================================================
 show_progress 2 $TOTAL_STEPS "$MSG_CONFIG"
 
-MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop packages)
+MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security secureboot shell desktop packages)
 MODULES_DIR="$NIXOS_DIR/modules"
 
 FOUND_MODULES=()
@@ -185,8 +185,7 @@ for MODULE in "${MODULES[@]}"; do
     if [[ -f "$SCRIPT_DIR/$MODULE.nix" ]]; then
         FOUND_MODULES+=("$MODULE")
     else
-        log_warn "Pominięto brakujący plik $MODULE.nix." \
-                 "Skipping missing file $MODULE.nix."
+        echo "Skipping missing file $MODULE.nix."
     fi
 done
 
@@ -221,6 +220,13 @@ done
 # ==========================================================
 show_progress 3 $TOTAL_STEPS "$MSG_REBUILD"
 
+# Secure Boot (lanzaboote) wymaga istniejących kluczy przed przebudową.
+if [[ " ${FOUND_MODULES[*]} " == *" secureboot "* ]] && ! sudo test -f /var/lib/sbctl/keys/db/db.key; then
+    log_info "Tworzenie kluczy Secure Boot (sbctl)..." \
+             "Creating Secure Boot keys (sbctl)..."
+    nix-shell -p sbctl --run 'sudo "$(command -v sbctl)" create-keys'
+fi
+
 if ! sudo nixos-rebuild switch; then
     sudo cp -af "$BACKUP" "$CONF"
     log_err "Przebudowa systemu nie powiodła się. Przywrócono configuration.nix z kopii: $BACKUP" \
@@ -240,6 +246,14 @@ if [[ "$SCRIPT_LANG" == "pl" ]]; then
     echo -e "${SUCCESS}✔ KONFIGURACJA ZAKOŃCZONA SUKCESEM!${NC}" >&3
 else
     echo -e "${SUCCESS}✔ CONFIGURATION COMPLETED SUCCESSFULLY!${NC}" >&3
+fi
+
+if [[ " ${FOUND_MODULES[*]} " == *" secureboot "* ]]; then
+    if [[ "$SCRIPT_LANG" == "pl" ]]; then
+        echo -e "${WARN}⚠ Secure Boot: włącz Setup Mode w UEFI, po restarcie wykonaj: sudo sbctl enroll-keys --microsoft${NC}" >&3
+    else
+        echo -e "${WARN}⚠ Secure Boot: enable Setup Mode in UEFI, then after reboot run: sudo sbctl enroll-keys --microsoft${NC}" >&3
+    fi
 fi
 
 # =============================================================
