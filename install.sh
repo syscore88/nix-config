@@ -177,7 +177,7 @@ fi
 # ==========================================================
 show_progress 2 $TOTAL_STEPS "$MSG_CONFIG"
 
-MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security secureboot shell desktop packages)
+MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop packages)
 MODULES_DIR="$NIXOS_DIR/modules"
 
 FOUND_MODULES=()
@@ -220,13 +220,7 @@ done
 # ==========================================================
 show_progress 3 $TOTAL_STEPS "$MSG_REBUILD"
 
-if [[ " ${FOUND_MODULES[*]} " == *" secureboot "* ]] && ! sudo test -f /var/lib/sbctl/keys/db/db.key; then
-    log_info "Tworzenie kluczy Secure Boot (sbctl)..." \
-             "Creating Secure Boot keys (sbctl)..."
-    nix-shell -p sbctl --run 'sudo "$(command -v sbctl)" create-keys'
-fi
-
-if ! sudo nixos-rebuild switch; then
+if ! sudo nixos-rebuild switch --option extra-experimental-features "nix-command flakes"; then
     sudo cp -af "$BACKUP" "$CONF"
     log_err "Przebudowa systemu nie powiodła się. Przywrócono configuration.nix z kopii: $BACKUP" \
             "System rebuild failed. configuration.nix restored from backup: $BACKUP"
@@ -247,14 +241,6 @@ else
     echo -e "${SUCCESS}✔ CONFIGURATION COMPLETED SUCCESSFULLY!${NC}" >&3
 fi
 
-if [[ " ${FOUND_MODULES[*]} " == *" secureboot "* ]]; then
-    if [[ "$SCRIPT_LANG" == "pl" ]]; then
-        echo -e "${WARN}⚠ Secure Boot: włącz Setup Mode w UEFI, po restarcie wykonaj: sudo sbctl enroll-keys --microsoft${NC}" >&3
-    else
-        echo -e "${WARN}⚠ Secure Boot: enable Setup Mode in UEFI, then after reboot run: sudo sbctl enroll-keys --microsoft${NC}" >&3
-    fi
-fi
-
 # =============================================================
 #  RESTART SYSTEMU
 # =============================================================
@@ -269,5 +255,5 @@ case "$RESTART_CHOICE" in
     [YyTt]*)
         DO_REBOOT=1
         ;;
-esac
+es:
 exit 0
