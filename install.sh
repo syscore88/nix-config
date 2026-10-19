@@ -220,7 +220,6 @@ done
 # ==========================================================
 show_progress 3 $TOTAL_STEPS "$MSG_REBUILD"
 
-# Secure Boot (lanzaboote) wymaga istniejących kluczy przed przebudową.
 if [[ " ${FOUND_MODULES[*]} " == *" secureboot "* ]] && ! sudo test -f /var/lib/sbctl/keys/db/db.key; then
     log_info "Tworzenie kluczy Secure Boot (sbctl)..." \
              "Creating Secure Boot keys (sbctl)..."
