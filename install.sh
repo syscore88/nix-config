@@ -220,7 +220,7 @@ done
 # ==========================================================
 show_progress 3 $TOTAL_STEPS "$MSG_REBUILD"
 
-if ! sudo nixos-rebuild switch --option extra-experimental-features "nix-command flakes"; then
+if ! sudo nixos-rebuild switch; then
     sudo cp -af "$BACKUP" "$CONF"
     log_err "Przebudowa systemu nie powiodła się. Przywrócono configuration.nix z kopii: $BACKUP" \
             "System rebuild failed. configuration.nix restored from backup: $BACKUP"
@@ -230,7 +230,7 @@ fi
 show_progress 4 $TOTAL_STEPS "$MSG_REBUILD"
 
 # ==========================================================
-# 5. ZAKOŃCZENIE
+# 4. ZAKOŃCZENIE
 # ==========================================================
 show_progress 5 $TOTAL_STEPS "$MSG_FINALIZE"
 echo -e "\n" >&3
@@ -255,5 +255,5 @@ case "$RESTART_CHOICE" in
     [YyTt]*)
         DO_REBOOT=1
         ;;
-es:
+esac
 exit 0
