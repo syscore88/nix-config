@@ -25,13 +25,24 @@ CONFIG="$NIXOS_DIR/configuration.nix"
 MODULE="$NIXOS_DIR/secureboot.nix"
 LANZABOOTE_REF="v1.0.0"
 PKI_BUNDLE="/var/lib/sbctl"
+CONFIG_BACKUP="$CONFIG.bak-secureboot"
 
+CONFIG_CHANGED=0
 TMP_DIR=""
 SUDO_KEEPALIVE_PID=""
 DO_REBOOT=0
 
 cleanup_on_exit() {
     local exit_code=$?
+    if [ "$exit_code" -ne 0 ] && [ "$CONFIG_CHANGED" = "1" ] && sudo test -f "$CONFIG_BACKUP"; then
+        if sudo cp "$CONFIG_BACKUP" "$CONFIG"; then
+            if [[ "$SCRIPT_LANG" == "pl" ]]; then
+                echo -e "${WARN}⚠ Przywrócono oryginalny $CONFIG.${NC}"
+            else
+                echo -e "${WARN}⚠ Restored the original $CONFIG.${NC}"
+            fi
+        fi
+    fi
     [ -n "${SUDO_KEEPALIVE_PID:-}" ] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     [ -n "${TMP_DIR:-}" ] && rm -rf "$TMP_DIR"
     if [ "$exit_code" -ne 0 ]; then
@@ -115,9 +126,12 @@ fi
 
 if ! grep -q 'secureboot\.nix' "$CONFIG"; then
     log_info "Dodawanie modułu do $CONFIG..." "Adding the module to $CONFIG..."
-    sudo cp "$CONFIG" "$CONFIG.bak-secureboot"
+    sudo cp "$CONFIG" "$CONFIG_BACKUP"
+    CONFIG_CHANGED=1
     if grep -Eq '^[[:space:]]*imports[[:space:]]*=[[:space:]]*\[' "$CONFIG"; then
         sudo sed -i -E '0,/^[[:space:]]*imports[[:space:]]*=[[:space:]]*\[/s//&\n    .\/secureboot.nix/' "$CONFIG"
+    elif grep -Eq '^[[:space:]]*imports[[:space:]]*=' "$CONFIG"; then
+        sudo sed -i -E '/^[[:space:]]*imports[[:space:]]*=/,/\[/s/\[/[ .\/secureboot.nix/' "$CONFIG"
     else
         LINE="$(grep -nE '^\{[[:space:]]*$' "$CONFIG" | head -n1 | cut -d: -f1 || true)"
         [ -n "$LINE" ] || { log_err "Nie znaleziono miejsca na imports w $CONFIG" "Could not find a place for imports in $CONFIG"; exit 1; }
@@ -155,6 +169,7 @@ EOF
 
 log_info "Przebudowa systemu z tymczasowym flake..." "Rebuilding the system with a temporary flake..."
 "${SUDO_NIX[@]}" nixos-rebuild switch --flake "$TMP_DIR#secureboot" --impure
+CONFIG_CHANGED=0
 
 log_info "Weryfikacja podpisów..." "Verifying signatures..."
 sudo sbctl verify || true
