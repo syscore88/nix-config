@@ -173,6 +173,26 @@ if [ -d "$SCRIPT_DIR/.config" ]; then
     cp -afT "$SCRIPT_DIR/.config" ~/.config
 fi
 
+if [ -f ~/.config/kwalletrc ]; then
+    cat > ~/.config/kwalletrc << 'EOF'
+[Wallet]
+Close When Idle=false
+Close on Screensaver=false
+Default Wallet=kdewallet
+Enabled=false
+First Use=false
+Idle Timeout=10
+Launch Manager=false
+Leave Manager Open=false
+Leave Open=true
+Prompt on Open=false
+Use One Wallet=true
+
+[org.freedesktop.secrets]
+apiEnabled=false
+EOF
+fi
+
 # ==========================================================
 # 2. USTAWIENIA DO configuration.nix
 # ==========================================================
