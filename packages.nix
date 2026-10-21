@@ -16,7 +16,6 @@
     gimp
     gimpPlugins.gmic
     krita
-    krita-plugin-gmic
     gmic
     discord
     telegram-desktop
