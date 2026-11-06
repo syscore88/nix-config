@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 
 let
   inherit (pkgs.lib.gvariant) mkTuple mkInt32;
@@ -9,6 +9,30 @@ in
   virtualisation.spiceUSBRedirection.enable = pkgs.lib.mkForce true;
 
   users.groups.libvirtd.members = [ "__INSTALL_USER__" ];
+
+  systemd.services.libvirt-default-subnet = {
+    description = "Move libvirt default network off a colliding subnet";
+    after = [ "libvirtd.service" ];
+    requires = [ "libvirtd.service" ];
+    wantedBy = [ "multi-user.target" ];
+    path = [ config.virtualisation.libvirtd.package pkgs.iproute2 pkgs.gnugrep pkgs.gnused pkgs.coreutils ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      ip -4 -o addr show | grep -v virbr0 | grep -q ' 192\.168\.122\.' || exit 0
+      xml="$(virsh net-dumpxml default)" || exit 0
+      echo "$xml" | grep -q '192\.168\.122\.' || exit 0
+      echo "$xml" | sed 's/192\.168\.122\./192.168.150./g' > /tmp/libvirt-default.xml
+      virsh net-destroy default || true
+      virsh net-undefine default || true
+      virsh net-define /tmp/libvirt-default.xml
+      virsh net-autostart default
+      virsh net-start default
+      rm -f /tmp/libvirt-default.xml
+    '';
+  };
 
   programs.dconf.profiles.user.databases = [
     {
