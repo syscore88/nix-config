@@ -26,13 +26,14 @@ in
       ip -4 -o addr show | awk '$2 != "virbr0" && $4 ~ /^192\.168\.122\./ {found=1} END {exit !found}' || exit 0
       xml="$(virsh net-dumpxml default --inactive)" || exit 0
       echo "$xml" | grep -q '192\.168\.122\.' || exit 0
-      echo "$xml" | sed 's/192\.168\.122\./192.168.150./g' > /tmp/libvirt-default.xml
+      tmp="$(mktemp)"
+      trap 'rm -f "$tmp"' EXIT
+      echo "$xml" | sed 's/192\.168\.122\./192.168.150./g' > "$tmp"
       virsh net-destroy default || true
       virsh net-undefine default || true
-      virsh net-define /tmp/libvirt-default.xml
+      virsh net-define "$tmp"
       virsh net-autostart default
       virsh net-start default
-      rm -f /tmp/libvirt-default.xml
     '';
   };
 
