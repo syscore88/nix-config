@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 
 {
   networking.networkmanager.dns = "default";
@@ -11,5 +11,5 @@
 
   services.openssh.enable = pkgs.lib.mkForce false;
 
-  networking.firewall.allowedTCPPorts = [ 22 ];
+  networking.firewall.allowedTCPPorts = pkgs.lib.optional config.services.openssh.enable 22;
 }
