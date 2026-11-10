@@ -5,7 +5,6 @@
     dconf-editor
     cdemu-daemon
     cdemu-client
-    gcdemu
     brave
     google-chrome
     faugus-launcher
@@ -41,6 +40,10 @@
     gamescope
     vkd3d
     lsfg-vk-ui
+    libxrender
+    libxrandr
+    alsa-plugins
+    libpulseaudio
     kdePackages.partitionmanager
     gnome-disk-utility
     timeshift
