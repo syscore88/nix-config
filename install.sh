@@ -199,7 +199,34 @@ fi
 # ==========================================================
 show_progress 2 $TOTAL_STEPS "$MSG_CONFIG"
 
-MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop packages)
+GPU_VENDORS=()
+GPU_MODULES=()
+ALL_GPU_MODULES=(nvidia amd intel nonamegpu)
+GPU_INFO=""
+if command -v lspci &>/dev/null; then
+    GPU_INFO=$(lspci | grep -i -E "vga|3d" || true)
+else
+    for GPU_VENDOR_FILE in /sys/class/drm/card*/device/vendor; do
+        [[ -r "$GPU_VENDOR_FILE" ]] && GPU_INFO+="$(cat "$GPU_VENDOR_FILE") "
+    done
+fi
+
+echo "$GPU_INFO" | grep -qi -E "nvidia|0x10de" && GPU_VENDORS+=("nvidia")
+echo "$GPU_INFO" | grep -qi -E "\b(amd|ati)\b|advanced micro devices|radeon|0x1002" && GPU_VENDORS+=("amd")
+echo "$GPU_INFO" | grep -qi -E "intel|0x8086" && GPU_VENDORS+=("intel")
+
+if [ "${#GPU_VENDORS[@]}" -eq 0 ]; then
+    GPU_MODULES=("nonamegpu")
+else
+    GPU_MODULES=("${GPU_VENDORS[@]}")
+fi
+
+if [ "${#GPU_VENDORS[@]}" -ge 2 ]; then
+    GPU_TYPE="$(IFS=+; echo "${GPU_VENDORS[*]}")"
+    log_info "Wykryto hybrydowy układ graficzny: $GPU_TYPE" "Detected a hybrid GPU setup: $GPU_TYPE"
+fi
+
+MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop "${GPU_MODULES[@]}" packages)
 MODULES_DIR="$NIXOS_DIR/modules"
 
 FOUND_MODULES=()
@@ -234,6 +261,13 @@ done < <(for MODULE in "${FOUND_MODULES[@]}"; do cat "$MODULES_DIR/$MODULE.nix";
 for MODULE in "${FOUND_MODULES[@]}"; do
     if ! sudo grep -qF "./modules/$MODULE.nix" "$CONF"; then
         sudo sed -i "0,/hardware-configuration\.nix/s|hardware-configuration\.nix|&\n    ./modules/$MODULE.nix|" "$CONF"
+    fi
+done
+
+for GPU_MODULE in "${ALL_GPU_MODULES[@]}"; do
+    if [[ " ${GPU_MODULES[*]} " != *" $GPU_MODULE "* ]]; then
+        sudo sed -i -E "\|^[[:space:]]*\./modules/$GPU_MODULE\.nix[[:space:]]*$|d" "$CONF"
+        sudo rm -f "$MODULES_DIR/$GPU_MODULE.nix"
     fi
 done
 
