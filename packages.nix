@@ -44,7 +44,8 @@
     libxrandr
     alsa-plugins
     libpulseaudio
-    kdePackages.partitionmanager
+    kdePackages.krdc
+    kdePackages.krfb
     gnome-disk-utility
     timeshift
     bleachbit
