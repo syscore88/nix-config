@@ -2,7 +2,9 @@
 
 A comprehensive, automated Bash post-installation script for **NixOS**. Instead of changing the system imperatively, it injects a managed block of declarative settings into `/etc/nixos/configuration.nix`, rebuilds the system, and then sets up Flatpak apps, virt-manager defaults and your dotfiles. It configures graphics, the XanMod kernel, DNS, a silent boot splash, performance tweaks, garbage collection, Zsh, a large curated set of system/multimedia/gaming/virtualization packages, and more.
 
-The script auto-detects the system language (Polish/English) from the `LANG`/`LC_ALL` locale and prints all status messages accordingly.
+The script auto-detects the system language (Polish/English) from the `LANG`/`LC_ALL` locale and prints all status messages accordingly. 
+
+If you don't want Secure Boot, delete the secureboot.nix file before running the script.
 
 ---
 
