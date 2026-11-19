@@ -5,7 +5,7 @@
     dconf-editor
     cdemu-daemon
     cdemu-client
-    brave
+    brave-origin
     google-chrome
     faugus-launcher
     kdePackages.ghostwriter
