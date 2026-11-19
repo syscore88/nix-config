@@ -1,7 +1,7 @@
 { pkgs, ... }:
 
 {
-  nixpkgs.config.allowInsecurePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [ "electron" "ventoy" ];
+  nixpkgs.config.allowInsecurePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [ "electron" "ventoy-full-qt" ];
 
   system.autoUpgrade.enable = true;
   system.autoUpgrade.allowReboot = true;
