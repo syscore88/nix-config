@@ -4,8 +4,6 @@ A comprehensive, automated Bash post-installation script for **NixOS**. Instead 
 
 The script auto-detects the system language (Polish/English) from the `LANG`/`LC_ALL` locale and prints all status messages accordingly. 
 
-If you don't want Secure Boot, delete the secureboot.nix file before running the script.
-
 ---
 
 ## 🚀 Script Features
