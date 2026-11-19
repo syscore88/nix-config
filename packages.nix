@@ -49,7 +49,7 @@
     gnome-disk-utility
     timeshift
     bleachbit
-    ventoy
+    ventoy-full-qt
     fastfetch
     inxi
     rsync
