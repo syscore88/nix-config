@@ -2,8 +2,7 @@
 set -uo pipefail
 
 detect_system_lang() {
-    local sys_lang="${LANG:-}"
-    [[ -z "$sys_lang" ]] && sys_lang="${LC_ALL:-${LC_MESSAGES:-}}"
+    local sys_lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
     if [[ "$sys_lang" == pl* ]]; then
         echo "pl"
     else
@@ -25,7 +24,6 @@ exec 3>&1
 exec >>"$TMP_LOG" 2>&1
 
 RESTART_NEEDED=false
-KERNEL_UPDATED=false
 USE_RUN0=0
 PRIVS_GRANTED=0
 RUN0_NOPASSWD_FILE="/etc/polkit-1/rules.d/51-run0-nopasswd.rules"
@@ -142,6 +140,16 @@ if ! command -v visudo >/dev/null 2>&1 || sudo --version 2>/dev/null | grep -qi 
     USE_RUN0=1
 fi
 
+cleanup_stale_privs() {
+    sudo -n true 2>/dev/null || return 0
+    sudo -n rm -f /etc/sudoers.d/99-temp-update 2>/dev/null
+    if sudo -n test -f "$RUN0_NOPASSWD_FILE" 2>/dev/null; then
+        sudo -n rm -f "$RUN0_NOPASSWD_FILE" 2>/dev/null
+        sudo -n systemctl try-restart polkit 2>/dev/null || true
+    fi
+}
+cleanup_stale_privs
+
 echo -e "${INFO}======================================================${NC}" >&3
 echo -e "${INFO}${MSG_TITLE}${NC}" >&3
 echo -e "${INFO}======================================================${NC}" >&3
@@ -220,7 +228,7 @@ if ! sudo -n true 2>/dev/null; then
     exit 1
 fi
 
-TOTAL_STEPS=15
+TOTAL_STEPS=17
 STEP=0
 show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
@@ -267,6 +275,16 @@ else
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
+if command -v gext &> /dev/null; then
+    gext update
+fi
+STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
+
+if command -v cinnamon-spice-updater &> /dev/null; then
+    cinnamon-spice-updater --update-all
+fi
+STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
+
 if command -v fwupdmgr &> /dev/null; then
     sudo fwupdmgr refresh --force
     FWUPD_OUT=$(sudo fwupdmgr update -y 2>&1)
@@ -306,7 +324,7 @@ if command -v flatpak &> /dev/null; then
     USED_REMOTES=$(flatpak list --columns=origin 2>/dev/null | sort -u)
     ALL_REMOTES=$(flatpak remotes --columns=name 2>/dev/null)
     while IFS= read -r remote; do
-        if [ -n "$remote" ] && ! echo "$USED_REMOTES" | grep -qx "$remote"; then
+        if [ -n "$remote" ] && [ "$remote" != "flathub" ] && ! echo "$USED_REMOTES" | grep -qxF -- "$remote"; then
             sudo flatpak remote-delete --force "$remote" 2>/dev/null
         fi
     done <<< "$ALL_REMOTES"
@@ -319,11 +337,18 @@ fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 sudo journalctl --vacuum-time=7d
-sudo find /var/log -type f -name "*.gz" -mtime +14 -exec rm -f {} +
+sudo find /var/log -type f -name "*.gz" -mtime +7 -exec rm -f {} +
+sudo find /var/log -type f -name "*.1" -exec rm -f {} +
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-sudo find /tmp -type f -atime +5 -exec rm -f {} + 2>/dev/null
-sudo find /var/tmp -type f -atime +5 -exec rm -f {} + 2>/dev/null
+sudo find /tmp -xdev -type f -atime +3 \
+    ! -path "/tmp/systemd-private-*" \
+    ! -path "/tmp/.*" \
+    -exec rm -f {} + 2>/dev/null
+sudo find /var/tmp -xdev -type f -atime +3 \
+    ! -path "/var/tmp/systemd-private-*" \
+    ! -path "/var/tmp/.*" \
+    -exec rm -f {} + 2>/dev/null
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 # ---------------------------------------------------------------
@@ -348,7 +373,20 @@ if command -v flatpak &> /dev/null; then
 
     flatpak uninstall --unused --user --delete-data -y
     flatpak repair --user
+    rm -rf ~/.local/share/flatpak/repo/tmp/* 2>/dev/null
     rm -f ~/.local/share/flatpak/history 2>/dev/null
+
+    INSTALLED_FLATPAKS=$(flatpak list --app --columns=application 2>/dev/null)
+    if [ -n "$INSTALLED_FLATPAKS" ] && [ -d "$HOME/.var/app" ]; then
+        for app_dir in "$HOME/.var/app"/*; do
+            if [ -d "$app_dir" ]; then
+                app_id=$(basename "$app_dir")
+                if ! echo "$INSTALLED_FLATPAKS" | grep -qxF -- "$app_id"; then
+                    rm -rf "$app_dir"
+                fi
+            fi
+        done
+    fi
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
@@ -359,10 +397,13 @@ find ~/.cache -type f -atime +14 \
     ! -path "*/BraveSoftware/*" \
     ! -path "*/opera/*" \
     ! -path "*/vivaldi/*" \
+    ! -path "*/huggingface/*" \
+    ! -path "*/torch/*" \
+    ! -path "*/ms-playwright/*" \
     -exec rm -f {} + 2>/dev/null
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-find ~/.cache/thumbnails -type f -atime +14 -exec rm -f {} + 2>/dev/null
+find ~/.cache/thumbnails -type f -atime +7 -exec rm -f {} + 2>/dev/null
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 fc-cache -r
@@ -381,7 +422,6 @@ STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 for part in initrd kernel kernel-modules; do
     if [ "$(readlink -f "/run/booted-system/$part" 2>/dev/null)" != "$(readlink -f "/run/current-system/$part" 2>/dev/null)" ]; then
         RESTART_NEEDED=true
-        KERNEL_UPDATED=true
     fi
 done
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
