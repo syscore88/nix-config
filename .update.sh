@@ -3,6 +3,8 @@ set -uo pipefail
 
 detect_system_lang() {
     local sys_lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+    sys_lang="${sys_lang//\"/}"
+    sys_lang="${sys_lang//\'/}"
     if [[ "$sys_lang" == pl* ]]; then
         echo "pl"
     else
@@ -24,34 +26,48 @@ exec 3>&1
 exec >>"$TMP_LOG" 2>&1
 
 RESTART_NEEDED=false
+CURRENT_USER=$(whoami)
 USE_RUN0=0
+ELEVATE="sudo"
 PRIVS_GRANTED=0
+SUDO_KEEPALIVE_PID=""
 RUN0_NOPASSWD_FILE="/etc/polkit-1/rules.d/51-run0-nopasswd.rules"
 NIXOS_DIR="/etc/nixos"
 KEEP_GENERATIONS=2
 
+if command -v run0 >/dev/null 2>&1 && { ! command -v sudo >/dev/null 2>&1 || sudo --version 2>/dev/null | grep -qi "run0"; }; then
+    USE_RUN0=1
+    ELEVATE="run0"
+fi
+
 remove_temp_privs() {
-    [[ "$PRIVS_GRANTED" -eq 1 ]] || return 0
-    if [[ "$USE_RUN0" -eq 1 ]]; then
-        sudo -n rm -f "$RUN0_NOPASSWD_FILE" 2>/dev/null
-        sudo -n systemctl try-restart polkit 2>/dev/null || true
-    else
-        sudo -n rm -f /etc/sudoers.d/99-temp-update 2>/dev/null
+    if [ -n "$SUDO_KEEPALIVE_PID" ]; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+        wait "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+        SUDO_KEEPALIVE_PID=""
     fi
-    PRIVS_GRANTED=0
+    if [[ "$PRIVS_GRANTED" -eq 1 ]]; then
+        if [[ "$USE_RUN0" -eq 1 ]]; then
+            run0 rm -f "$RUN0_NOPASSWD_FILE" 2>/dev/null || true
+            run0 systemctl try-restart polkit 2>/dev/null || true
+        else
+            sudo -k 2>/dev/null || true
+        fi
+        PRIVS_GRANTED=0
+    fi
 }
 
 cleanup_on_exit() {
     local exit_code=$?
     remove_temp_privs
-    printf '\033[?25h' >&3
-    echo "" >&3
+    printf '\033[?25h' >&3 2>/dev/null || true
+    echo "" >&3 2>/dev/null || true
     if [ "$exit_code" -ne 0 ]; then
         cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true
         if [[ "$SCRIPT_LANG" == "pl" ]]; then
-            echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}" >&3
+            echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}" >&3 2>/dev/null || true
         else
-            echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}" >&3
+            echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}" >&3 2>/dev/null || true
         fi
     else
         rm -f "$LOG_FILE"
@@ -79,21 +95,23 @@ show_progress() {
 
     local overhead=$(( bar_width + reserved ))
     local avail=$(( cols - overhead ))
-    if (( avail < 5 )); then avail=5; fi
-    if (( ${#msg} > avail )); then
-        msg="${msg:0:$((avail - 3))}..."
-    fi
 
     local filled=$(( percent * bar_width / 100 ))
     local empty=$(( bar_width - filled ))
 
     local bar_filled=""
     local bar_empty=""
-    if [ $filled -gt 0 ]; then printf -v bar_filled '%*s' "$filled" ''; bar_filled="${bar_filled// /#}"; fi
-    if [ $empty -gt 0 ]; then printf -v bar_empty '%*s' "$empty" ''; bar_empty="${bar_empty// /-}"; fi
+    if [ "$filled" -gt 0 ]; then printf -v bar_filled '%*s' "$filled" ''; bar_filled="${bar_filled// /#}"; fi
+    if [ "$empty" -gt 0 ]; then printf -v bar_empty '%*s' "$empty" ''; bar_empty="${bar_empty// /-}"; fi
 
-    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3
-    cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true
+    if (( avail >= 4 )); then
+        if (( ${#msg} > avail )); then
+            msg="${msg:0:$((avail - 3))}..."
+        fi
+        printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3
+    else
+        printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%%" "$bar_filled" "$bar_empty" "$percent" >&3
+    fi
 }
 
 print_pkg_list() {
@@ -119,6 +137,7 @@ if [ "$SCRIPT_LANG" = "pl" ]; then
     MSG_RESTART_WARN="UWAGA: Zalecany jest restart komputera"
     MSG_NO_RESTART="Restart systemu nie jest aktualnie wymagany."
     MSG_PRESS_ENTER="Naciśnij Enter, aby zamknąć okno..."
+    MSG_UPDATE_FAIL="[X] Aktualizacja źródeł NixOS nie powiodła się – przerywam."
     MSG_REBUILD_FAIL="[X] Przebudowa systemu NixOS nie powiodła się – przerywam."
 else
     MSG_TITLE="                   SYSTEM MAINTENANCE                   "
@@ -132,104 +151,90 @@ else
     MSG_RESTART_WARN="WARNING: A system restart is recommended"
     MSG_NO_RESTART="A system restart is not currently required."
     MSG_PRESS_ENTER="Press Enter to close this window..."
+    MSG_UPDATE_FAIL="[X] NixOS source update failed - aborting."
     MSG_REBUILD_FAIL="[X] NixOS system rebuild failed - aborting."
 fi
-
-CURRENT_USER=$(whoami)
-if ! command -v visudo >/dev/null 2>&1 || sudo --version 2>/dev/null | grep -qi "run0"; then
-    USE_RUN0=1
-fi
-
-cleanup_stale_privs() {
-    sudo -n true 2>/dev/null || return 0
-    sudo -n rm -f /etc/sudoers.d/99-temp-update 2>/dev/null
-    if sudo -n test -f "$RUN0_NOPASSWD_FILE" 2>/dev/null; then
-        sudo -n rm -f "$RUN0_NOPASSWD_FILE" 2>/dev/null
-        sudo -n systemctl try-restart polkit 2>/dev/null || true
-    fi
-}
-cleanup_stale_privs
 
 echo -e "${INFO}======================================================${NC}" >&3
 echo -e "${INFO}${MSG_TITLE}${NC}" >&3
 echo -e "${INFO}======================================================${NC}" >&3
-echo -e "${WARN}${MSG_ASK_PASS}${NC}" >&3
-if [[ -r /dev/tty ]]; then
-    IFS= read -rs SUDO_PASSWORD < /dev/tty || true
-else
-    IFS= read -rs SUDO_PASSWORD || true
-fi
-echo "" >&3
 
 if [[ "$USE_RUN0" -eq 1 ]]; then
-    POLKIT_TMP="$(mktemp)"
-    cat > "$POLKIT_TMP" << EOF
+    POLKIT_DIR_REAL="$(readlink -f /etc/polkit-1/rules.d 2>/dev/null || true)"
+    if [[ -n "$POLKIT_DIR_REAL" && "$POLKIT_DIR_REAL" != /nix/store/* ]]; then
+        POLKIT_TMP="$(mktemp)"
+        cat > "$POLKIT_TMP" << EOF
 polkit.addRule(function(action, subject) {
     if (subject.user == "$CURRENT_USER") {
         return polkit.Result.YES;
     }
 });
 EOF
-    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' install -m 0644 -o root -g root "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" &>/dev/null; then
-        PRIVS_GRANTED=1
-        printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' systemctl try-restart polkit 2>/dev/null || true
-        if ! sudo -n true 2>/dev/null; then
-            printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' systemctl try-restart polkit 2>/dev/null || true
-        fi
-        rm -f "$POLKIT_TMP"
-        unset SUDO_PASSWORD
-    else
-        rm -f "$POLKIT_TMP"
-        unset SUDO_PASSWORD
-        if [[ "$SCRIPT_LANG" == "pl" ]]; then
-            echo -e "${ERR}[X] Nieprawidłowe hasło lub nie udało się nadać uprawnień tymczasowych – przerywam. Jeśli w /etc/sudoers działa opcja targetpw, podaj hasło roota.${NC}" >&3
+        if { [[ -r /dev/tty ]] && run0 install -m 0644 -o root -g root "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" </dev/tty >&3 2>&3; } \
+           || { [[ ! -r /dev/tty ]] && run0 install -m 0644 -o root -g root "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" >&3 2>&3; }; then
+            PRIVS_GRANTED=1
+            run0 systemctl try-restart polkit 2>/dev/null || true
+            rm -f "$POLKIT_TMP"
         else
-            echo -e "${ERR}[X] Wrong password or failed to grant temporary privileges - aborting. If targetpw is set in /etc/sudoers, enter the root password.${NC}" >&3
+            rm -f "$POLKIT_TMP"
+            if [[ "$SCRIPT_LANG" == "pl" ]]; then
+                echo -e "${ERR}[X] Nieprawidłowe hasło lub nie udało się nadać uprawnień tymczasowych (run0) – przerywam.${NC}" >&3
+            else
+                echo -e "${ERR}[X] Wrong password or failed to grant temporary privileges (run0) - aborting.${NC}" >&3
+            fi
+            exit 1
         fi
-        exit 1
+    else
+        if ! { { [[ -r /dev/tty ]] && run0 true </dev/tty >&3 2>&3; } || { [[ ! -r /dev/tty ]] && run0 true >&3 2>&3; }; }; then
+            if [[ "$SCRIPT_LANG" == "pl" ]]; then
+                echo -e "${ERR}[X] Nie udało się uzyskać uprawnień administratora (run0) – przerywam.${NC}" >&3
+            else
+                echo -e "${ERR}[X] Failed to obtain administrator privileges (run0) - aborting.${NC}" >&3
+            fi
+            exit 1
+        fi
     fi
 else
-    SUDOERS_TMP="$(mktemp)"
-    SUDO_ERR="$(mktemp)"
-    printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$CURRENT_USER" > "$SUDOERS_TMP"
-    VISUDO_BIN="$(command -v visudo 2>/dev/null || echo /run/current-system/sw/bin/visudo)"
-    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' "$VISUDO_BIN" -cf "$SUDOERS_TMP" >/dev/null 2>>"$SUDO_ERR" \
-       && printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' install -d -m 0750 -o root -g root /etc/sudoers.d >/dev/null 2>>"$SUDO_ERR" \
-       && printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99-temp-update >/dev/null 2>>"$SUDO_ERR"; then
-        PRIVS_GRANTED=1
-        rm -f "$SUDOERS_TMP" "$SUDO_ERR"
+    echo -e "${WARN}${MSG_ASK_PASS}${NC}" >&3
+    if [[ -r /dev/tty ]]; then
+        IFS= read -rs SUDO_PASSWORD < /dev/tty || true
+    else
+        IFS= read -rs SUDO_PASSWORD || true
+    fi
+    echo "" >&3
+
+    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' -v &>/dev/null; then
         unset SUDO_PASSWORD
+        PRIVS_GRANTED=1
         if ! sudo -n true 2>/dev/null; then
             if [[ "$SCRIPT_LANG" == "pl" ]]; then
-                echo -e "${WARN}[!] Reguła NOPASSWD zainstalowana, ale sudo nadal prosi o hasło - sprawdź 'sudo -l' (możliwa inna reguła w /etc/sudoers nadpisująca wpis z sudoers.d).${NC}" >&3
+                echo -e "${ERR}[X] Sesja sudo nie została zapamiętana (sprawdź ustawienie timestamp_timeout w sudoers) – przerywam.${NC}" >&3
             else
-                echo -e "${WARN}[!] NOPASSWD rule installed, but sudo still asks for a password - check 'sudo -l' (a rule in /etc/sudoers may be overriding the sudoers.d entry).${NC}" >&3
+                echo -e "${ERR}[X] Sudo session was not cached (check timestamp_timeout in sudoers) - aborting.${NC}" >&3
             fi
+            exit 1
         fi
+        (
+            while kill -0 "$$" 2>/dev/null; do
+                sleep 50
+                sudo -n -v 2>/dev/null || exit 0
+            done
+        ) </dev/null >/dev/null 2>&1 &
+        SUDO_KEEPALIVE_PID=$!
     else
-        cat "$SUDO_ERR"
-        rm -f "$SUDOERS_TMP" "$SUDO_ERR"
         unset SUDO_PASSWORD
         if [[ "$SCRIPT_LANG" == "pl" ]]; then
-            echo -e "${ERR}[X] Nieprawidłowe hasło lub składnia pliku sudoers – przerywam. Jeśli w /etc/sudoers działa opcja targetpw, podaj hasło roota.${NC}" >&3
+            echo -e "${ERR}[X] Nieprawidłowe hasło administratora – przerywam. Jeśli w /etc/sudoers działa opcja targetpw, podaj hasło roota.${NC}" >&3
         else
-            echo -e "${ERR}[X] Wrong password or invalid sudoers syntax - aborting. If targetpw is set in /etc/sudoers, enter the root password.${NC}" >&3
+            echo -e "${ERR}[X] Wrong administrator password - aborting. If targetpw is set in /etc/sudoers, enter the root password.${NC}" >&3
         fi
         exit 1
     fi
 fi
 
-if ! sudo -n true 2>/dev/null; then
-    if [[ "$SCRIPT_LANG" == "pl" ]]; then
-        echo -e "${ERR}[X] Nie udało się uzyskać uprawnień bez hasła – przerywam.${NC}" >&3
-    else
-        echo -e "${ERR}[X] Could not obtain passwordless privileges - aborting.${NC}" >&3
-    fi
-    exit 1
-fi
-
-TOTAL_STEPS=17
+TOTAL_STEPS=16
 STEP=0
+printf '\033[?25l' >&3
 show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
 # ---------------------------------------------------------------
@@ -239,19 +244,25 @@ USE_FLAKE=false
 [[ -f "$NIXOS_DIR/flake.nix" ]] && USE_FLAKE=true
 
 if [ "$USE_FLAKE" = true ]; then
-    sudo env LC_ALL=C nix flake update --flake "$NIXOS_DIR" \
-        || sudo env LC_ALL=C nix flake update "$NIXOS_DIR"
+    "$ELEVATE" env LC_ALL=C nix --extra-experimental-features 'nix-command flakes' flake update --flake "$NIXOS_DIR" \
+        || "$ELEVATE" env LC_ALL=C nix --extra-experimental-features 'nix-command flakes' flake update "$NIXOS_DIR"
 else
-    sudo env LC_ALL=C nix-channel --update
+    "$ELEVATE" env LC_ALL=C nix-channel --update
+fi
+UPDATE_RC=$?
+if [ "$UPDATE_RC" -ne 0 ]; then
+    printf "\r\033[K" >&3
+    echo -e "${ERR}${MSG_UPDATE_FAIL}${NC}" >&3
+    exit "$UPDATE_RC"
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
 BEFORE_SYSTEM="$(readlink -f /run/current-system)"
 
 if [ "$USE_FLAKE" = true ]; then
-    sudo env LC_ALL=C nixos-rebuild switch --flake "$NIXOS_DIR"
+    "$ELEVATE" env LC_ALL=C nixos-rebuild switch --flake "$NIXOS_DIR"
 else
-    sudo env LC_ALL=C nixos-rebuild switch
+    "$ELEVATE" env LC_ALL=C nixos-rebuild switch
 fi
 REBUILD_RC=$?
 if [ "$REBUILD_RC" -ne 0 ]; then
@@ -286,8 +297,8 @@ fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
 if command -v fwupdmgr &> /dev/null; then
-    sudo fwupdmgr refresh --force
-    FWUPD_OUT=$(sudo fwupdmgr update -y 2>&1)
+    "$ELEVATE" env LC_ALL=C fwupdmgr refresh --force
+    FWUPD_OUT=$("$ELEVATE" env LC_ALL=C fwupdmgr update -y --no-reboot-check 2>&1)
     echo "$FWUPD_OUT"
     if echo "$FWUPD_OUT" | grep -qiE "restart|reboot"; then
         RESTART_NEEDED=true
@@ -298,54 +309,55 @@ STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 # ---------------------------------------------------------------
 # PHASE: SYSTEM CLEANUP (SUDO)
 # ---------------------------------------------------------------
-sudo nix-env --profile /nix/var/nix/profiles/system --delete-generations "+$KEEP_GENERATIONS"
-sudo /run/current-system/bin/switch-to-configuration boot
+"$ELEVATE" nix-env --profile /nix/var/nix/profiles/system --delete-generations "+$KEEP_GENERATIONS"
+nix-env --delete-generations "+$KEEP_GENERATIONS" 2>/dev/null || true
+"$ELEVATE" /run/current-system/bin/switch-to-configuration boot
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-sudo nix-collect-garbage
+"$ELEVATE" nix-collect-garbage
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 if command -v flatpak &> /dev/null; then
     FLATPAK_BEFORE=$(flatpak list --system --app --columns=application,version 2>/dev/null)
 
-    sudo flatpak update --system -y
+    "$ELEVATE" flatpak update --system -y
 
     FLATPAK_AFTER=$(flatpak list --system --app --columns=application,version 2>/dev/null)
 
-    FLATPAK_PKGS=$(join -t$'\t' -j1 \
-        <(echo "$FLATPAK_BEFORE" | sort -t$'\t' -k1,1) \
-        <(echo "$FLATPAK_AFTER" | sort -t$'\t' -k1,1) 2>/dev/null \
+    FLATPAK_PKGS=$(LC_ALL=C join -t$'\t' -j1 \
+        <(echo "$FLATPAK_BEFORE" | LC_ALL=C sort -t$'\t' -k1,1) \
+        <(echo "$FLATPAK_AFTER" | LC_ALL=C sort -t$'\t' -k1,1) 2>/dev/null \
         | awk -F'\t' '$2 != $3 { printf "%s: %s → %s\n", $1, ($2==""?"?":$2), ($3==""?"?":$3) }')
     print_pkg_list "$MSG_FLATPAK_UPDATED" "$FLATPAK_PKGS"
 
-    sudo flatpak uninstall --unused --system --delete-data -y
-    sudo flatpak repair --system
+    "$ELEVATE" flatpak uninstall --unused --system --delete-data -y
+    "$ELEVATE" flatpak repair --system
 
-    USED_REMOTES=$(flatpak list --columns=origin 2>/dev/null | sort -u)
-    ALL_REMOTES=$(flatpak remotes --columns=name 2>/dev/null)
+    USED_REMOTES=$(flatpak list --system --columns=origin 2>/dev/null | sort -u)
+    ALL_REMOTES=$(flatpak remotes --system --columns=name 2>/dev/null)
     while IFS= read -r remote; do
         if [ -n "$remote" ] && [ "$remote" != "flathub" ] && ! echo "$USED_REMOTES" | grep -qxF -- "$remote"; then
-            sudo flatpak remote-delete --force "$remote" 2>/dev/null
+            "$ELEVATE" flatpak remote-delete --system --force "$remote" 2>/dev/null
         fi
     done <<< "$ALL_REMOTES"
 
-    sudo rm -rf /var/tmp/flatpak-cache-* 2>/dev/null
-    sudo rm -rf /var/lib/flatpak/repo/tmp/* 2>/dev/null
-    sudo find /var/lib/flatpak -name "*.tmp" -delete 2>/dev/null
-    sudo rm -f /var/lib/flatpak/history 2>/dev/null
+    "$ELEVATE" rm -rf /var/tmp/flatpak-cache-* 2>/dev/null
+    "$ELEVATE" rm -rf /var/lib/flatpak/repo/tmp/* 2>/dev/null
+    "$ELEVATE" find /var/lib/flatpak -name "*.tmp" -delete 2>/dev/null
+    "$ELEVATE" rm -f /var/lib/flatpak/history 2>/dev/null
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-sudo journalctl --vacuum-time=7d
-sudo find /var/log -type f -name "*.gz" -mtime +7 -exec rm -f {} +
-sudo find /var/log -type f -name "*.1" -exec rm -f {} +
+"$ELEVATE" journalctl --vacuum-time=7d
+"$ELEVATE" find /var/log -type f -name "*.gz" -mtime +7 -exec rm -f {} +
+"$ELEVATE" find /var/log -type f -name "*.1" -exec rm -f {} +
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-sudo find /tmp -xdev -type f -atime +3 \
+"$ELEVATE" find /tmp -xdev -type f -atime +3 \
     ! -path "/tmp/systemd-private-*" \
     ! -path "/tmp/.*" \
     -exec rm -f {} + 2>/dev/null
-sudo find /var/tmp -xdev -type f -atime +3 \
+"$ELEVATE" find /var/tmp -xdev -type f -atime +3 \
     ! -path "/var/tmp/systemd-private-*" \
     ! -path "/var/tmp/.*" \
     -exec rm -f {} + 2>/dev/null
@@ -354,10 +366,6 @@ STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 # ---------------------------------------------------------------
 # PHASE: USER CLEANUP (NO SUDO)
 # ---------------------------------------------------------------
-nix-env --delete-generations "+$KEEP_GENERATIONS" 2>/dev/null
-nix-collect-garbage 2>/dev/null
-STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
-
 if command -v flatpak &> /dev/null; then
     FLATPAK_BEFORE=$(flatpak list --user --app --columns=application,version 2>/dev/null)
 
@@ -365,9 +373,9 @@ if command -v flatpak &> /dev/null; then
 
     FLATPAK_AFTER=$(flatpak list --user --app --columns=application,version 2>/dev/null)
 
-    FLATPAK_PKGS=$(join -t$'\t' -j1 \
-        <(echo "$FLATPAK_BEFORE" | sort -t$'\t' -k1,1) \
-        <(echo "$FLATPAK_AFTER" | sort -t$'\t' -k1,1) 2>/dev/null \
+    FLATPAK_PKGS=$(LC_ALL=C join -t$'\t' -j1 \
+        <(echo "$FLATPAK_BEFORE" | LC_ALL=C sort -t$'\t' -k1,1) \
+        <(echo "$FLATPAK_AFTER" | LC_ALL=C sort -t$'\t' -k1,1) 2>/dev/null \
         | awk -F'\t' '$2 != $3 { printf "%s: %s → %s\n", $1, ($2==""?"?":$2), ($3==""?"?":$3) }')
     print_pkg_list "$MSG_FLATPAK_UPDATED" "$FLATPAK_PKGS"
 
@@ -410,7 +418,7 @@ fc-cache -r
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 USER_ID=$(id -u)
-if [ -S "/run/user/$USER_ID/bus" ]; then
+if command -v dconf &> /dev/null && [ -S "/run/user/$USER_ID/bus" ]; then
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus" dconf reset /org/virt-manager/virt-manager/urls/isos 2>/dev/null
 fi
 rm -rf "$HOME/.cache/virt-manager" 2>/dev/null
@@ -419,15 +427,20 @@ STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 # ---------------------------------------------------------------
 # PHASE: RESTART CHECK
 # ---------------------------------------------------------------
-for part in initrd kernel kernel-modules; do
-    if [ "$(readlink -f "/run/booted-system/$part" 2>/dev/null)" != "$(readlink -f "/run/current-system/$part" 2>/dev/null)" ]; then
-        RESTART_NEEDED=true
-    fi
-done
+if [ -d /run/booted-system ] && [ -d /run/current-system ]; then
+    for part in initrd kernel kernel-modules; do
+        booted_target="$(readlink -f "/run/booted-system/$part" 2>/dev/null || true)"
+        current_target="$(readlink -f "/run/current-system/$part" 2>/dev/null || true)"
+        if [ -n "$booted_target" ] && [ -n "$current_target" ] && [ "$booted_target" != "$current_target" ]; then
+            RESTART_NEEDED=true
+        fi
+    done
+fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 remove_temp_privs
 
+printf '\033[?25h' >&3 2>/dev/null || true
 echo -e "\n" >&3
 echo -e "${SUCCESS}======================================================${NC}" >&3
 echo -e "${SUCCESS}${MSG_DONE}${NC}" >&3
@@ -439,4 +452,8 @@ else
     echo -e "${INFO}${MSG_NO_RESTART}${NC}" >&3
 fi
 echo -e "${WARN}${MSG_PRESS_ENTER}${NC}" >&3
-read -r
+if [[ -r /dev/tty ]]; then
+    read -r < /dev/tty || true
+else
+    read -r || true
+fi
