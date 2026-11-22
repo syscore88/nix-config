@@ -39,7 +39,8 @@ CONF_REAL=""
 BACKUP=""
 MODULES_BACKUP=""
 MODULES_HAD=0
-DATA_BACKUP_DIR="$HOME/.installer-backup-$(date +%Y%m%d_%H%M%S)"
+NIX_KEYS_TMP=""
+NIX_CONF_TMP=""
 
 exec 3>&1
 exec >>"$TMP_LOG" 2>&1
@@ -90,7 +91,7 @@ cleanup_on_exit() {
         fi
     } >&3 2>/dev/null
 
-    rm -f "$TMP_LOG"
+    rm -f "$TMP_LOG" "$NIX_KEYS_TMP" "$NIX_CONF_TMP"
 
     if [ "$exit_code" -eq 0 ] && [ "$DO_REBOOT" = "1" ]; then
         sudo -n systemctl reboot
@@ -172,9 +173,9 @@ TOTAL_STEPS=5
 
 if [[ "$EUID" -eq 0 ]]; then
     if [[ "$SCRIPT_LANG" == "pl" ]]; then
-        echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3
+        echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3 2>/dev/null || true
     else
-        echo -e "${ERR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}" >&3
+        echo -e "${ERR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}" >&3 2>/dev/null || true
     fi
     exit 1
 fi
@@ -182,7 +183,7 @@ fi
 # ==========================================================
 # 1. WSTĘPNE SPRAWDZENIA I UPRAWNIENIA
 # ==========================================================
-printf '\033[?7h' >&3
+printf '\033[?7h' >&3 2>/dev/null || true
 
 if ! grep -qx 'ID=nixos' /etc/os-release 2>/dev/null; then
     log_err "Ten skrypt działa tylko na NixOS." "This script works on NixOS only."
@@ -207,7 +208,7 @@ sudo -v
 ) &
 SUDO_KEEPALIVE_PID=$!
 
-printf '\033[?7l' >&3
+printf '\033[?7l' >&3 2>/dev/null || true
 
 show_progress 0 $TOTAL_STEPS "$MSG_PREP"
 show_progress 1 $TOTAL_STEPS "$MSG_PREP"
@@ -228,8 +229,6 @@ if [ -d "$SCRIPT_DIR/.config" ]; then
 fi
 
 if [ -f ~/.config/kwalletrc ]; then
-    mkdir -p "$DATA_BACKUP_DIR/.config"
-    cp -a ~/.config/kwalletrc "$DATA_BACKUP_DIR/.config/kwalletrc" || true
     cat > ~/.config/kwalletrc << 'EOF'
 [Wallet]
 Close When Idle=false
@@ -323,25 +322,60 @@ for MODULE in "${FOUND_MODULES[@]}"; do
 done
 
 if sudo grep -q 'install\.sh: BEGIN' "$CONF_REAL" && sudo grep -q 'install\.sh: END' "$CONF_REAL"; then
-    sudo sed -i '/install\.sh: BEGIN/,/install\.sh: END/d' "$CONF_REAL"
+    sudo sed -i '/install\.sh: BEGIN/,/install\.sh: END/d' "$CONF_REAL" || true
 elif sudo grep -q 'install\.sh: BEGIN' "$CONF_REAL"; then
     log_quiet "Znacznik install.sh: BEGIN bez END w $CONF – pominięto usuwanie bloku." \
               "install.sh: BEGIN marker without END in $CONF - block removal skipped."
 fi
-while IFS= read -r BLOCK_KEY; do
-    sudo sed -i -E "/^[[:space:]]*${BLOCK_KEY//./\\.}[[:space:]]*=.*;[[:space:]]*$/d" "$CONF_REAL"
-done < <(for MODULE in "${FOUND_MODULES[@]}"; do cat "$MODULES_DIR/$MODULE.nix"; done | grep -E '^  [A-Za-z0-9_.-]+ = .*;$' | sed -E 's/^  ([A-Za-z0-9_.-]+) = .*/\1/')
+NIX_KEYS_TMP="$(mktemp)"
+NIX_CONF_TMP="$(mktemp)"
+(for MODULE in "${FOUND_MODULES[@]}"; do cat "$MODULES_DIR/$MODULE.nix"; done) \
+    | grep -E '^  [A-Za-z0-9_.-]+ =' \
+    | sed -E 's/^  ([A-Za-z0-9_.-]+) =.*/\1/' \
+    | grep -vx 'imports' \
+    | sort -u > "$NIX_KEYS_TMP" || true
+if [ -s "$NIX_KEYS_TMP" ]; then
+    sudo awk '
+        function count_chars(str, ch,    tmp) { tmp = str; return gsub(ch, "", tmp) }
+        NR == FNR { if ($0 != "") keys[$0] = 1; next }
+        {
+            line = $0
+            if (skip) {
+                s = line; sub(/#.*/, "", s)
+                depth += count_chars(s, "\{") - count_chars(s, "\}")
+                depth += count_chars(s, "\[") - count_chars(s, "\]")
+                if (depth <= 0 && s ~ /;[[:space:]]*$/) { skip = 0; depth = 0 }
+                next
+            }
+            if (match(line, /^[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*=/)) {
+                k = substr(line, RSTART, RLENGTH)
+                sub(/^[[:space:]]*/, "", k)
+                sub(/[[:space:]]*=$/, "", k)
+                if (k in keys) {
+                    s = line; sub(/#.*/, "", s)
+                    depth = count_chars(s, "\{") - count_chars(s, "\}") + count_chars(s, "\[") - count_chars(s, "\]")
+                    if (depth > 0 || s !~ /;[[:space:]]*$/) { skip = 1 } else { depth = 0 }
+                    next
+                }
+            }
+            print line
+        }
+    ' "$NIX_KEYS_TMP" "$CONF_REAL" > "$NIX_CONF_TMP" && sudo cp -f "$NIX_CONF_TMP" "$CONF_REAL"
+fi
+rm -f "$NIX_KEYS_TMP" "$NIX_CONF_TMP"
+NIX_KEYS_TMP=""
+NIX_CONF_TMP=""
 
 for MODULE in "${FOUND_MODULES[@]}"; do
     CONF_ACTIVE="$(sudo grep -v '^[[:space:]]*#' "$CONF_REAL" || true)"
     if ! grep -qF "./modules/$MODULE.nix" <<< "$CONF_ACTIVE"; then
-        sudo sed -i "0,/hardware-configuration\.nix/s|hardware-configuration\.nix|&\n    ./modules/$MODULE.nix|" "$CONF_REAL"
+        sudo sed -i "0,/hardware-configuration\.nix/s|hardware-configuration\.nix|&\n    ./modules/$MODULE.nix|" "$CONF_REAL" || true
     fi
 done
 
 for GPU_MODULE in "${ALL_GPU_MODULES[@]}"; do
     if [[ " ${GPU_MODULES[*]} " != *" $GPU_MODULE "* ]]; then
-        sudo sed -i -E "\|^[[:space:]]*\./modules/$GPU_MODULE\.nix[[:space:]]*$|d" "$CONF_REAL"
+        sudo sed -i -E "\|^[[:space:]]*\./modules/$GPU_MODULE\.nix[[:space:]]*$|d" "$CONF_REAL" || true
         sudo rm -f "$MODULES_DIR/$GPU_MODULE.nix"
     fi
 done
@@ -359,6 +393,9 @@ if ! sudo nixos-rebuild switch; then
     exit 1
 fi
 RESTORE_CONF=0
+if [ -n "$BACKUP" ]; then
+    sudo rm -f "$BACKUP" || true
+fi
 if [ -n "$MODULES_BACKUP" ]; then
     sudo rm -rf "$MODULES_BACKUP" || true
 fi
@@ -369,12 +406,12 @@ show_progress 4 $TOTAL_STEPS "$MSG_REBUILD"
 # 4. ZAKOŃCZENIE
 # ==========================================================
 show_progress 5 $TOTAL_STEPS "$MSG_FINALIZE"
-printf '\n\n' >&3
+printf '\n\n' >&3 2>/dev/null || true
 
 if [[ "$SCRIPT_LANG" == "pl" ]]; then
-    echo -e "${SUCCESS}[OK] KONFIGURACJA ZAKOŃCZONA SUKCESEM!${NC}" >&3
+    echo -e "${SUCCESS}[OK] KONFIGURACJA ZAKOŃCZONA SUKCESEM!${NC}" >&3 2>/dev/null || true
 else
-    echo -e "${SUCCESS}[OK] CONFIGURATION COMPLETED SUCCESSFULLY!${NC}" >&3
+    echo -e "${SUCCESS}[OK] CONFIGURATION COMPLETED SUCCESSFULLY!${NC}" >&3 2>/dev/null || true
 fi
 
 # =============================================================
@@ -385,7 +422,7 @@ if [[ "$SCRIPT_LANG" == "pl" ]]; then
 else
     RESTART_PROMPT="Do you want to restart the system now? [Y/N]: "
 fi
-echo -en "${INFO}==> ${RESTART_PROMPT}${NC}" >&3
+echo -en "${INFO}==> ${RESTART_PROMPT}${NC}" >&3 2>/dev/null || true
 RESTART_CHOICE=""
 read -r RESTART_CHOICE < /dev/tty || RESTART_CHOICE=""
 case "$RESTART_CHOICE" in
