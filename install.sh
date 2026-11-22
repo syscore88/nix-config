@@ -7,9 +7,8 @@ set -Eeuo pipefail
 export PATH="/run/wrappers/bin:/run/current-system/sw/bin:$PATH"
 
 detect_system_lang() {
-    local sys_lang="${LANG:-}"
-    [[ -z "$sys_lang" ]] && sys_lang="${LC_ALL:-${LC_MESSAGES:-}}"
-    if [[ "$sys_lang" == pl_PL* || "$sys_lang" == pl* ]]; then
+    local sys_lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+    if [[ "$sys_lang" == pl* ]]; then
         echo "pl"
     else
         echo "en"
@@ -26,39 +25,94 @@ NC='\033[0m'
 TMP_LOG="$(mktemp /tmp/kde-install-log.XXXXXX)"
 LOG_FILE="$HOME/install_error_$(date +%Y%m%d_%H%M%S).log"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CURRENT_USER=$(whoami)
+NIXOS_DIR="/etc/nixos"
+CONF="$NIXOS_DIR/configuration.nix"
+MODULES_DIR="$NIXOS_DIR/modules"
+
+QUIET_WARNS=0
+SUDO_KEEPALIVE_PID=""
+DO_REBOOT=0
+RESTORE_CONF=0
+CONF_REAL=""
+BACKUP=""
+MODULES_BACKUP=""
+MODULES_HAD=0
+DATA_BACKUP_DIR="$HOME/.installer-backup-$(date +%Y%m%d_%H%M%S)"
+
 exec 3>&1
 exec >>"$TMP_LOG" 2>&1
 
+restore_config() {
+    if [ -n "$CONF_REAL" ] && [ -n "$BACKUP" ]; then
+        sudo -n cp -p "$BACKUP" "$CONF_REAL" || true
+    fi
+    if [ "$MODULES_HAD" = "1" ] && [ -n "$MODULES_BACKUP" ]; then
+        sudo -n rm -rf "$MODULES_DIR" || true
+        sudo -n cp -a "$MODULES_BACKUP" "$MODULES_DIR" || true
+    else
+        sudo -n rm -rf "$MODULES_DIR" || true
+    fi
+}
+
 cleanup_on_exit() {
     local exit_code=$?
-    [ -n "${SUDO_KEEPALIVE_PID:-}" ] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
-    printf '\033[?7h' >&3
-    if [ "$exit_code" -ne 0 ]; then
-        echo -e "\n" >&3
-        cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true
-        if [[ "$SCRIPT_LANG" == "pl" ]]; then
-            echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}" >&3
-        else
-            echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}" >&3
-        fi
+    trap '' INT TERM HUP
+    trap - ERR
+    set +e
+
+    if [ "$RESTORE_CONF" = "1" ]; then
+        restore_config
+        RESTORE_CONF=0
     fi
+
+    if [ -n "$SUDO_KEEPALIVE_PID" ]; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
+        pkill -P "$SUDO_KEEPALIVE_PID" 2>/dev/null
+    fi
+
+    if [ "$exit_code" -ne 0 ] || [ "$QUIET_WARNS" -gt 0 ]; then
+        cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null
+    else
+        rm -f "$HOME"/install_error_*.log
+    fi
+
+    {
+        printf '\033[?7h'
+        if [ "$exit_code" -ne 0 ]; then
+            echo -e "\n"
+            if [[ "$SCRIPT_LANG" == "pl" ]]; then
+                echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}"
+            else
+                echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}"
+            fi
+        fi
+    } >&3 2>/dev/null
+
     rm -f "$TMP_LOG"
-    if [ "$exit_code" -eq 0 ] && [ "${DO_REBOOT:-0}" = "1" ]; then
-        sudo systemctl reboot
+
+    if [ "$exit_code" -eq 0 ] && [ "$DO_REBOOT" = "1" ]; then
+        sudo -n systemctl reboot
     fi
 }
 trap cleanup_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 _pick_msg() { [[ "$SCRIPT_LANG" == "pl" ]] && echo "$1" || echo "$2"; }
 _log_write() {
+    printf "\r\033[K" >&3 2>/dev/null || true
     echo -e "$1"
-    echo -e "$1" >&3
+    echo -e "$1" >&3 2>/dev/null || true
     cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true
 }
 log_info()  { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${INFO}==> $m${NC}"; }
 log_ok()    { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${SUCCESS}[OK] $m${NC}"; }
 log_err()   { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${ERR}[X] ERROR: $m${NC}"; }
 log_warn()  { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${WARN}[!] WARN: $m${NC}"; }
+log_quiet() { local m; m="$(_pick_msg "$1" "$2")"; echo "[!] WARN: $m"; QUIET_WARNS=$(( QUIET_WARNS + 1 )); }
 
 trap 'log_err "Błąd w linii $LINENO. Polecenie: $BASH_COMMAND" "Error at line $LINENO. Command: $BASH_COMMAND"' ERR
 
@@ -95,7 +149,7 @@ show_progress() {
     if [ $filled -gt 0 ]; then printf -v bar_filled '%*s' "$filled" ''; bar_filled="${bar_filled// /#}"; fi
     if [ $empty -gt 0 ]; then printf -v bar_empty '%*s' "$empty" ''; bar_empty="${bar_empty// /-}"; fi
 
-    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3
+    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3 2>/dev/null || true
 }
 
 if [[ "$SCRIPT_LANG" == "pl" ]]; then
@@ -116,13 +170,12 @@ fi
 
 TOTAL_STEPS=5
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CURRENT_USER=$(whoami)
-NIXOS_DIR="/etc/nixos"
-CONF="$NIXOS_DIR/configuration.nix"
-
 if [[ "$EUID" -eq 0 ]]; then
-    echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3
+    if [[ "$SCRIPT_LANG" == "pl" ]]; then
+        echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3
+    else
+        echo -e "${ERR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}" >&3
+    fi
     exit 1
 fi
 
@@ -175,6 +228,8 @@ if [ -d "$SCRIPT_DIR/.config" ]; then
 fi
 
 if [ -f ~/.config/kwalletrc ]; then
+    mkdir -p "$DATA_BACKUP_DIR/.config"
+    cp -a ~/.config/kwalletrc "$DATA_BACKUP_DIR/.config/kwalletrc" || true
     cat > ~/.config/kwalletrc << 'EOF'
 [Wallet]
 Close When Idle=false
@@ -204,16 +259,16 @@ GPU_MODULES=()
 ALL_GPU_MODULES=(nvidia amd intel nonamegpu)
 GPU_INFO=""
 if command -v lspci &>/dev/null; then
-    GPU_INFO=$(lspci | grep -i -E "vga|3d" || true)
+    GPU_INFO=$(lspci | grep -i -E "vga|3d|display" || true)
 else
     for GPU_VENDOR_FILE in /sys/class/drm/card*/device/vendor; do
         [[ -r "$GPU_VENDOR_FILE" ]] && GPU_INFO+="$(cat "$GPU_VENDOR_FILE") "
     done
 fi
 
-echo "$GPU_INFO" | grep -qi -E "nvidia|0x10de" && GPU_VENDORS+=("nvidia")
-echo "$GPU_INFO" | grep -qi -E "\b(amd|ati)\b|advanced micro devices|radeon|0x1002" && GPU_VENDORS+=("amd")
-echo "$GPU_INFO" | grep -qi -E "intel|0x8086" && GPU_VENDORS+=("intel")
+grep -qi -E "nvidia|0x10de" <<< "$GPU_INFO" && GPU_VENDORS+=("nvidia")
+grep -qi -E "\b(amd|ati)\b|advanced micro devices|radeon|0x1002" <<< "$GPU_INFO" && GPU_VENDORS+=("amd")
+grep -qi -E "intel|0x8086" <<< "$GPU_INFO" && GPU_VENDORS+=("intel")
 
 if [ "${#GPU_VENDORS[@]}" -eq 0 ]; then
     GPU_MODULES=("nonamegpu")
@@ -223,11 +278,10 @@ fi
 
 if [ "${#GPU_VENDORS[@]}" -ge 2 ]; then
     GPU_TYPE="$(IFS=+; echo "${GPU_VENDORS[*]}")"
-    log_info "Wykryto hybrydowy układ graficzny: $GPU_TYPE" "Detected a hybrid GPU setup: $GPU_TYPE"
+    _pick_msg "Wykryto hybrydowy układ graficzny: $GPU_TYPE" "Detected a hybrid GPU setup: $GPU_TYPE"
 fi
 
 MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop "${GPU_MODULES[@]}" packages)
-MODULES_DIR="$NIXOS_DIR/modules"
 
 FOUND_MODULES=()
 for MODULE in "${MODULES[@]}"; do
@@ -238,14 +292,29 @@ for MODULE in "${MODULES[@]}"; do
     fi
 done
 
-if ! sudo grep -q 'hardware-configuration\.nix' "$CONF"; then
+if [ "${#FOUND_MODULES[@]}" -eq 0 ]; then
+    log_err "Nie znaleziono żadnych plików modułów .nix w $SCRIPT_DIR." \
+            "No module .nix files found in $SCRIPT_DIR."
+    exit 1
+fi
+
+CONF_REAL="$(sudo readlink -f "$CONF" || true)"
+[ -n "$CONF_REAL" ] || CONF_REAL="$CONF"
+
+if ! sudo grep -q 'hardware-configuration\.nix' "$CONF_REAL"; then
     log_err "Nie znaleziono listy imports w $CONF." \
             "Could not find the imports list in $CONF."
     exit 1
 fi
 
-BACKUP="$CONF.bak-$(date +%Y%m%d_%H%M%S)"
-sudo cp -a "$CONF" "$BACKUP"
+BACKUP="$CONF_REAL.bak-$(date +%Y%m%d_%H%M%S)"
+sudo cp -p "$CONF_REAL" "$BACKUP"
+if [ -d "$MODULES_DIR" ]; then
+    MODULES_BACKUP="$NIXOS_DIR/modules.bak-$(date +%Y%m%d_%H%M%S)"
+    sudo cp -a "$MODULES_DIR" "$MODULES_BACKUP"
+    MODULES_HAD=1
+fi
+RESTORE_CONF=1
 
 sudo mkdir -p "$MODULES_DIR"
 for MODULE in "${FOUND_MODULES[@]}"; do
@@ -253,20 +322,26 @@ for MODULE in "${FOUND_MODULES[@]}"; do
     sudo chmod 644 "$MODULES_DIR/$MODULE.nix"
 done
 
-sudo sed -i '/install\.sh: BEGIN/,/install\.sh: END/d' "$CONF"
+if sudo grep -q 'install\.sh: BEGIN' "$CONF_REAL" && sudo grep -q 'install\.sh: END' "$CONF_REAL"; then
+    sudo sed -i '/install\.sh: BEGIN/,/install\.sh: END/d' "$CONF_REAL"
+elif sudo grep -q 'install\.sh: BEGIN' "$CONF_REAL"; then
+    log_quiet "Znacznik install.sh: BEGIN bez END w $CONF – pominięto usuwanie bloku." \
+              "install.sh: BEGIN marker without END in $CONF - block removal skipped."
+fi
 while IFS= read -r BLOCK_KEY; do
-    sudo sed -i -E "/^[[:space:]]*${BLOCK_KEY//./\\.}[[:space:]]*=.*;[[:space:]]*$/d" "$CONF"
+    sudo sed -i -E "/^[[:space:]]*${BLOCK_KEY//./\\.}[[:space:]]*=.*;[[:space:]]*$/d" "$CONF_REAL"
 done < <(for MODULE in "${FOUND_MODULES[@]}"; do cat "$MODULES_DIR/$MODULE.nix"; done | grep -E '^  [A-Za-z0-9_.-]+ = .*;$' | sed -E 's/^  ([A-Za-z0-9_.-]+) = .*/\1/')
 
 for MODULE in "${FOUND_MODULES[@]}"; do
-    if ! sudo grep -qF "./modules/$MODULE.nix" "$CONF"; then
-        sudo sed -i "0,/hardware-configuration\.nix/s|hardware-configuration\.nix|&\n    ./modules/$MODULE.nix|" "$CONF"
+    CONF_ACTIVE="$(sudo grep -v '^[[:space:]]*#' "$CONF_REAL" || true)"
+    if ! grep -qF "./modules/$MODULE.nix" <<< "$CONF_ACTIVE"; then
+        sudo sed -i "0,/hardware-configuration\.nix/s|hardware-configuration\.nix|&\n    ./modules/$MODULE.nix|" "$CONF_REAL"
     fi
 done
 
 for GPU_MODULE in "${ALL_GPU_MODULES[@]}"; do
     if [[ " ${GPU_MODULES[*]} " != *" $GPU_MODULE "* ]]; then
-        sudo sed -i -E "\|^[[:space:]]*\./modules/$GPU_MODULE\.nix[[:space:]]*$|d" "$CONF"
+        sudo sed -i -E "\|^[[:space:]]*\./modules/$GPU_MODULE\.nix[[:space:]]*$|d" "$CONF_REAL"
         sudo rm -f "$MODULES_DIR/$GPU_MODULE.nix"
     fi
 done
@@ -277,10 +352,15 @@ done
 show_progress 3 $TOTAL_STEPS "$MSG_REBUILD"
 
 if ! sudo nixos-rebuild switch; then
-    sudo cp -af "$BACKUP" "$CONF"
+    restore_config
+    RESTORE_CONF=0
     log_err "Przebudowa systemu nie powiodła się. Przywrócono configuration.nix z kopii: $BACKUP" \
             "System rebuild failed. configuration.nix restored from backup: $BACKUP"
     exit 1
+fi
+RESTORE_CONF=0
+if [ -n "$MODULES_BACKUP" ]; then
+    sudo rm -rf "$MODULES_BACKUP" || true
 fi
 
 show_progress 4 $TOTAL_STEPS "$MSG_REBUILD"
@@ -306,7 +386,8 @@ else
     RESTART_PROMPT="Do you want to restart the system now? [Y/N]: "
 fi
 echo -en "${INFO}==> ${RESTART_PROMPT}${NC}" >&3
-read -r RESTART_CHOICE < /dev/tty
+RESTART_CHOICE=""
+read -r RESTART_CHOICE < /dev/tty || RESTART_CHOICE=""
 case "$RESTART_CHOICE" in
     [YyTt]*)
         DO_REBOOT=1
