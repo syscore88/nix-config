@@ -47,13 +47,13 @@ remove_temp_privs() {
         SUDO_KEEPALIVE_PID=""
     fi
     if [[ "$PRIVS_GRANTED" -eq 1 ]]; then
-        if [[ "$USE_RUN0" -eq 1 ]]; then
-            run0 rm -f "$RUN0_NOPASSWD_FILE" 2>/dev/null || true
-            run0 systemctl try-restart polkit 2>/dev/null || true
-        else
-            sudo -k 2>/dev/null || true
-        fi
         PRIVS_GRANTED=0
+        if [[ "$USE_RUN0" -eq 1 ]]; then
+            [[ -e "$RUN0_NOPASSWD_FILE" ]] || return 0
+            run0 sh -c 'rm -f "$1"; systemctl try-restart polkit 2>/dev/null || true' _ "$RUN0_NOPASSWD_FILE" </dev/null 3>&- 2>/dev/null || true
+        else
+            sudo -k </dev/null 3>&- 2>/dev/null || true
+        fi
     fi
 }
 
@@ -73,6 +73,7 @@ cleanup_on_exit() {
         rm -f "$LOG_FILE"
     fi
     rm -f "$TMP_LOG"
+    exec 3>&- 2>/dev/null || true
 }
 trap cleanup_on_exit EXIT
 
@@ -170,10 +171,9 @@ polkit.addRule(function(action, subject) {
     }
 });
 EOF
-        if { [[ -r /dev/tty ]] && run0 install -m 0644 -o root -g root "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" </dev/tty >&3 2>&3; } \
-           || { [[ ! -r /dev/tty ]] && run0 install -m 0644 -o root -g root "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" >&3 2>&3; }; then
+        if { [[ -r /dev/tty ]] && run0 sh -c 'install -m 0644 -o root -g root "$1" "$2" || exit 1; systemctl try-restart polkit 2>/dev/null || true' _ "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" </dev/tty >&3 2>&3; } \
+           || { [[ ! -r /dev/tty ]] && run0 sh -c 'install -m 0644 -o root -g root "$1" "$2" || exit 1; systemctl try-restart polkit 2>/dev/null || true' _ "$POLKIT_TMP" "$RUN0_NOPASSWD_FILE" >&3 2>&3; }; then
             PRIVS_GRANTED=1
-            run0 systemctl try-restart polkit 2>/dev/null || true
             rm -f "$POLKIT_TMP"
         else
             rm -f "$POLKIT_TMP"
@@ -203,10 +203,10 @@ else
     fi
     echo "" >&3
 
-    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' -v &>/dev/null; then
+    if printf '%s\n' "${SUDO_PASSWORD:-}" | sudo -S -p '' -v 3>&- &>/dev/null; then
         unset SUDO_PASSWORD
         PRIVS_GRANTED=1
-        if ! sudo -n true 2>/dev/null; then
+        if ! sudo -n true </dev/null 3>&- 2>/dev/null; then
             if [[ "$SCRIPT_LANG" == "pl" ]]; then
                 echo -e "${ERR}[X] Sesja sudo nie została zapamiętana (sprawdź ustawienie timestamp_timeout w sudoers) – przerywam.${NC}" >&3
             else
@@ -215,11 +215,15 @@ else
             exit 1
         fi
         (
+            SLEEP_PID=""
+            trap 'kill "$SLEEP_PID" 2>/dev/null || true; exit 0' TERM INT HUP
             while kill -0 "$$" 2>/dev/null; do
-                sleep 50
+                sleep 50 &
+                SLEEP_PID=$!
+                wait "$SLEEP_PID" 2>/dev/null || exit 0
                 sudo -n -v 2>/dev/null || exit 0
             done
-        ) </dev/null >/dev/null 2>&1 &
+        ) </dev/null >/dev/null 2>&1 3>&- &
         SUDO_KEEPALIVE_PID=$!
     else
         unset SUDO_PASSWORD
@@ -244,10 +248,10 @@ USE_FLAKE=false
 [[ -f "$NIXOS_DIR/flake.nix" ]] && USE_FLAKE=true
 
 if [ "$USE_FLAKE" = true ]; then
-    "$ELEVATE" env LC_ALL=C nix --extra-experimental-features 'nix-command flakes' flake update --flake "$NIXOS_DIR" \
-        || "$ELEVATE" env LC_ALL=C nix --extra-experimental-features 'nix-command flakes' flake update "$NIXOS_DIR"
+    "$ELEVATE" env LC_ALL=C nix --extra-experimental-features 'nix-command flakes' flake update --flake "$NIXOS_DIR" </dev/null 3>&- \
+        || "$ELEVATE" env LC_ALL=C nix --extra-experimental-features 'nix-command flakes' flake update "$NIXOS_DIR" </dev/null 3>&-
 else
-    "$ELEVATE" env LC_ALL=C nix-channel --update
+    "$ELEVATE" env LC_ALL=C nix-channel --update </dev/null 3>&-
 fi
 UPDATE_RC=$?
 if [ "$UPDATE_RC" -ne 0 ]; then
@@ -260,9 +264,9 @@ STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 BEFORE_SYSTEM="$(readlink -f /run/current-system)"
 
 if [ "$USE_FLAKE" = true ]; then
-    "$ELEVATE" env LC_ALL=C nixos-rebuild switch --flake "$NIXOS_DIR"
+    "$ELEVATE" env LC_ALL=C nixos-rebuild switch --flake "$NIXOS_DIR" </dev/null 3>&-
 else
-    "$ELEVATE" env LC_ALL=C nixos-rebuild switch
+    "$ELEVATE" env LC_ALL=C nixos-rebuild switch </dev/null 3>&-
 fi
 REBUILD_RC=$?
 if [ "$REBUILD_RC" -ne 0 ]; then
@@ -274,7 +278,7 @@ fi
 AFTER_SYSTEM="$(readlink -f /run/current-system)"
 PKG_VERSIONS=""
 if [ "$BEFORE_SYSTEM" != "$AFTER_SYSTEM" ]; then
-    PKG_VERSIONS=$(nix --extra-experimental-features nix-command store diff-closures "$BEFORE_SYSTEM" "$AFTER_SYSTEM" 2>/dev/null \
+    PKG_VERSIONS=$(nix --extra-experimental-features nix-command store diff-closures "$BEFORE_SYSTEM" "$AFTER_SYSTEM" </dev/null 3>&- 2>/dev/null \
         | grep -E '→|∅' | sed -E 's/, [-+][0-9.]+ [KMG]iB$//' | sort -u)
 fi
 
@@ -287,18 +291,18 @@ fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
 if command -v gext &> /dev/null; then
-    gext update
+    gext update </dev/null 3>&-
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
 if command -v cinnamon-spice-updater &> /dev/null; then
-    cinnamon-spice-updater --update-all
+    cinnamon-spice-updater --update-all </dev/null 3>&-
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_UPDATE"
 
 if command -v fwupdmgr &> /dev/null; then
-    "$ELEVATE" env LC_ALL=C fwupdmgr refresh --force
-    FWUPD_OUT=$("$ELEVATE" env LC_ALL=C fwupdmgr update -y --no-reboot-check 2>&1)
+    "$ELEVATE" env LC_ALL=C fwupdmgr refresh --force </dev/null 3>&-
+    FWUPD_OUT=$("$ELEVATE" env LC_ALL=C fwupdmgr update -y --no-reboot-check </dev/null 3>&- 2>&1)
     echo "$FWUPD_OUT"
     if echo "$FWUPD_OUT" | grep -qiE "restart|reboot"; then
         RESTART_NEEDED=true
@@ -309,20 +313,22 @@ STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 # ---------------------------------------------------------------
 # PHASE: SYSTEM CLEANUP (SUDO)
 # ---------------------------------------------------------------
-"$ELEVATE" nix-env --profile /nix/var/nix/profiles/system --delete-generations "+$KEEP_GENERATIONS"
-nix-env --delete-generations "+$KEEP_GENERATIONS" 2>/dev/null || true
-"$ELEVATE" /run/current-system/bin/switch-to-configuration boot
+{
+    "$ELEVATE" nix-env --profile /nix/var/nix/profiles/system --delete-generations "+$KEEP_GENERATIONS"
+    nix-env --delete-generations "+$KEEP_GENERATIONS" 2>/dev/null || true
+    "$ELEVATE" /run/current-system/bin/switch-to-configuration boot
+} </dev/null 3>&-
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-"$ELEVATE" nix-collect-garbage
+"$ELEVATE" nix-collect-garbage </dev/null 3>&-
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 if command -v flatpak &> /dev/null; then
-    FLATPAK_BEFORE=$(flatpak list --system --app --columns=application,version 2>/dev/null)
+    FLATPAK_BEFORE=$(flatpak list --system --app --columns=application,version </dev/null 3>&- 2>/dev/null)
 
-    "$ELEVATE" flatpak update --system -y
+    "$ELEVATE" flatpak update --system -y </dev/null 3>&-
 
-    FLATPAK_AFTER=$(flatpak list --system --app --columns=application,version 2>/dev/null)
+    FLATPAK_AFTER=$(flatpak list --system --app --columns=application,version </dev/null 3>&- 2>/dev/null)
 
     FLATPAK_PKGS=$(LC_ALL=C join -t$'\t' -j1 \
         <(echo "$FLATPAK_BEFORE" | LC_ALL=C sort -t$'\t' -k1,1) \
@@ -330,48 +336,54 @@ if command -v flatpak &> /dev/null; then
         | awk -F'\t' '$2 != $3 { printf "%s: %s → %s\n", $1, ($2==""?"?":$2), ($3==""?"?":$3) }')
     print_pkg_list "$MSG_FLATPAK_UPDATED" "$FLATPAK_PKGS"
 
-    "$ELEVATE" flatpak uninstall --unused --system --delete-data -y
-    "$ELEVATE" flatpak repair --system
+    {
+        "$ELEVATE" flatpak uninstall --unused --system --delete-data -y
+        "$ELEVATE" flatpak repair --system
 
-    USED_REMOTES=$(flatpak list --system --columns=origin 2>/dev/null | sort -u)
-    ALL_REMOTES=$(flatpak remotes --system --columns=name 2>/dev/null)
-    while IFS= read -r remote; do
-        if [ -n "$remote" ] && [ "$remote" != "flathub" ] && ! echo "$USED_REMOTES" | grep -qxF -- "$remote"; then
-            "$ELEVATE" flatpak remote-delete --system --force "$remote" 2>/dev/null
-        fi
-    done <<< "$ALL_REMOTES"
+        USED_REMOTES=$(flatpak list --system --columns=origin 2>/dev/null | sort -u)
+        ALL_REMOTES=$(flatpak remotes --system --columns=name 2>/dev/null)
+        while IFS= read -r remote; do
+            if [ -n "$remote" ] && [ "$remote" != "flathub" ] && ! echo "$USED_REMOTES" | grep -qxF -- "$remote"; then
+                "$ELEVATE" flatpak remote-delete --system --force "$remote" </dev/null 2>/dev/null
+            fi
+        done <<< "$ALL_REMOTES"
 
-    "$ELEVATE" rm -rf /var/tmp/flatpak-cache-* 2>/dev/null
-    "$ELEVATE" rm -rf /var/lib/flatpak/repo/tmp/* 2>/dev/null
-    "$ELEVATE" find /var/lib/flatpak -name "*.tmp" -delete 2>/dev/null
-    "$ELEVATE" rm -f /var/lib/flatpak/history 2>/dev/null
+        "$ELEVATE" rm -rf /var/tmp/flatpak-cache-* 2>/dev/null
+        "$ELEVATE" rm -rf /var/lib/flatpak/repo/tmp/* 2>/dev/null
+        "$ELEVATE" find /var/lib/flatpak -name "*.tmp" -delete 2>/dev/null
+        "$ELEVATE" rm -f /var/lib/flatpak/history 2>/dev/null
+    } </dev/null 3>&-
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-"$ELEVATE" journalctl --vacuum-time=7d
-"$ELEVATE" find /var/log -type f -name "*.gz" -mtime +7 -exec rm -f {} +
-"$ELEVATE" find /var/log -type f -name "*.1" -exec rm -f {} +
+{
+    "$ELEVATE" journalctl --vacuum-time=7d
+    "$ELEVATE" find /var/log -type f -name "*.gz" -mtime +7 -exec rm -f {} +
+    "$ELEVATE" find /var/log -type f -name "*.1" -exec rm -f {} +
+} </dev/null 3>&-
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-"$ELEVATE" find /tmp -xdev -type f -atime +3 \
-    ! -path "/tmp/systemd-private-*" \
-    ! -path "/tmp/.*" \
-    -exec rm -f {} + 2>/dev/null
-"$ELEVATE" find /var/tmp -xdev -type f -atime +3 \
-    ! -path "/var/tmp/systemd-private-*" \
-    ! -path "/var/tmp/.*" \
-    -exec rm -f {} + 2>/dev/null
+{
+    "$ELEVATE" find /tmp -xdev -type f -atime +3 \
+        ! -path "/tmp/systemd-private-*" \
+        ! -path "/tmp/.*" \
+        -exec rm -f {} + 2>/dev/null
+    "$ELEVATE" find /var/tmp -xdev -type f -atime +3 \
+        ! -path "/var/tmp/systemd-private-*" \
+        ! -path "/var/tmp/.*" \
+        -exec rm -f {} + 2>/dev/null
+} </dev/null 3>&-
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 # ---------------------------------------------------------------
 # PHASE: USER CLEANUP (NO SUDO)
 # ---------------------------------------------------------------
 if command -v flatpak &> /dev/null; then
-    FLATPAK_BEFORE=$(flatpak list --user --app --columns=application,version 2>/dev/null)
+    FLATPAK_BEFORE=$(flatpak list --user --app --columns=application,version </dev/null 3>&- 2>/dev/null)
 
-    flatpak update --user -y
+    flatpak update --user -y </dev/null 3>&-
 
-    FLATPAK_AFTER=$(flatpak list --user --app --columns=application,version 2>/dev/null)
+    FLATPAK_AFTER=$(flatpak list --user --app --columns=application,version </dev/null 3>&- 2>/dev/null)
 
     FLATPAK_PKGS=$(LC_ALL=C join -t$'\t' -j1 \
         <(echo "$FLATPAK_BEFORE" | LC_ALL=C sort -t$'\t' -k1,1) \
@@ -379,22 +391,24 @@ if command -v flatpak &> /dev/null; then
         | awk -F'\t' '$2 != $3 { printf "%s: %s → %s\n", $1, ($2==""?"?":$2), ($3==""?"?":$3) }')
     print_pkg_list "$MSG_FLATPAK_UPDATED" "$FLATPAK_PKGS"
 
-    flatpak uninstall --unused --user --delete-data -y
-    flatpak repair --user
-    rm -rf ~/.local/share/flatpak/repo/tmp/* 2>/dev/null
-    rm -f ~/.local/share/flatpak/history 2>/dev/null
+    {
+        flatpak uninstall --unused --user --delete-data -y
+        flatpak repair --user
+        rm -rf ~/.local/share/flatpak/repo/tmp/* 2>/dev/null
+        rm -f ~/.local/share/flatpak/history 2>/dev/null
 
-    INSTALLED_FLATPAKS=$(flatpak list --app --columns=application 2>/dev/null)
-    if [ -n "$INSTALLED_FLATPAKS" ] && [ -d "$HOME/.var/app" ]; then
-        for app_dir in "$HOME/.var/app"/*; do
-            if [ -d "$app_dir" ]; then
-                app_id=$(basename "$app_dir")
-                if ! echo "$INSTALLED_FLATPAKS" | grep -qxF -- "$app_id"; then
-                    rm -rf "$app_dir"
+        INSTALLED_FLATPAKS=$(flatpak list --app --columns=application 2>/dev/null)
+        if [ -n "$INSTALLED_FLATPAKS" ] && [ -d "$HOME/.var/app" ]; then
+            for app_dir in "$HOME/.var/app"/*; do
+                if [ -d "$app_dir" ]; then
+                    app_id=$(basename "$app_dir")
+                    if ! echo "$INSTALLED_FLATPAKS" | grep -qxF -- "$app_id"; then
+                        rm -rf "$app_dir"
+                    fi
                 fi
-            fi
-        done
-    fi
+            done
+        fi
+    } </dev/null 3>&-
 fi
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
@@ -408,20 +422,22 @@ find ~/.cache -type f -atime +14 \
     ! -path "*/huggingface/*" \
     ! -path "*/torch/*" \
     ! -path "*/ms-playwright/*" \
-    -exec rm -f {} + 2>/dev/null
+    -exec rm -f {} + </dev/null 3>&- 2>/dev/null
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-find ~/.cache/thumbnails -type f -atime +7 -exec rm -f {} + 2>/dev/null
+find ~/.cache/thumbnails -type f -atime +7 -exec rm -f {} + </dev/null 3>&- 2>/dev/null
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-fc-cache -r
+fc-cache -r </dev/null 3>&-
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
-USER_ID=$(id -u)
-if command -v dconf &> /dev/null && [ -S "/run/user/$USER_ID/bus" ]; then
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus" dconf reset /org/virt-manager/virt-manager/urls/isos 2>/dev/null
-fi
-rm -rf "$HOME/.cache/virt-manager" 2>/dev/null
+{
+    USER_ID=$(id -u)
+    if command -v dconf &> /dev/null && [ -S "/run/user/$USER_ID/bus" ]; then
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus" dconf reset /org/virt-manager/virt-manager/urls/isos 2>/dev/null
+    fi
+    rm -rf "$HOME/.cache/virt-manager" 2>/dev/null
+} </dev/null 3>&-
 STEP=$((STEP+1)); show_progress $STEP $TOTAL_STEPS "$MSG_PHASE_CLEAN_SYS"
 
 # ---------------------------------------------------------------
@@ -452,8 +468,22 @@ else
     echo -e "${INFO}${MSG_NO_RESTART}${NC}" >&3
 fi
 echo -e "${WARN}${MSG_PRESS_ENTER}${NC}" >&3
-if [[ -r /dev/tty ]]; then
-    read -r < /dev/tty || true
+if exec 4</dev/tty 2>/dev/null; then
+    stty sane <&4 2>/dev/null || true
+    IFS= read -r _ <&4 || true
+    exec 4<&-
 else
-    read -r || true
+    stty sane 2>/dev/null || true
+    IFS= read -r _ || true
 fi
+
+PARENT_COMM="$(ps -o comm= -p "$PPID" 2>/dev/null || cat "/proc/$PPID/comm" 2>/dev/null || true)"
+PARENT_COMM="$(printf '%s' "$PARENT_COMM" | tr -d '[:space:]')"
+PARENT_COMM="${PARENT_COMM#-}"
+case "$PARENT_COMM" in
+    bash|zsh|fish|sh|dash|ksh)
+        trap '' HUP PIPE
+        kill -HUP "$PPID" 2>/dev/null || true
+        ;;
+esac
+exit 0
