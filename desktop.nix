@@ -8,7 +8,6 @@
         "kwalletmanager"
         "plasma-browser-integration"
         "plasma-vault"
-        "krfb"
         "discover"
       ]);
 
