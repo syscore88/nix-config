@@ -280,7 +280,7 @@ if [ "${#GPU_VENDORS[@]}" -ge 2 ]; then
     _pick_msg "Wykryto hybrydowy układ graficzny: $GPU_TYPE" "Detected a hybrid GPU setup: $GPU_TYPE"
 fi
 
-MODULES=(boot kernel memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop "${GPU_MODULES[@]}" packages)
+MODULES=(boot kernel headers memory hardware cdemu network nix system flatpak gaming virtualisation security shell desktop "${GPU_MODULES[@]}" packages)
 
 FOUND_MODULES=()
 for MODULE in "${MODULES[@]}"; do
