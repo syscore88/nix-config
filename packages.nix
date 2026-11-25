@@ -2,6 +2,7 @@
 
 {
   environment.systemPackages = with pkgs; [
+    xhost
     dconf-editor
     cdemu-daemon
     cdemu-client
