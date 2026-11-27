@@ -3,15 +3,6 @@
 {
   security.polkit.enable = pkgs.lib.mkForce true;
 
-  security.sudo.extraRules = [
-    {
-      groups = [ "wheel" ];
-      commands = [
-        {
-          command = "ALL";
-          options = [ "NOPASSWD" ];
-        }
-      ];
-    }
-  ];
+  security.apparmor.enable = false;
 }
+```[cite: 1]
